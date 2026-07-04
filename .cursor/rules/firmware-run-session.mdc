@@ -1,0 +1,33 @@
+---
+description: Run session recovery หลัง ESP reboot — ซิงก์ TM + ATD35
+globs: src/run_session.h,src/main.cpp,src/varable.h,CHANGELOG.md,STABILITY_NOTES.md
+alwaysApply: false
+---
+
+# Run Session Recovery (v3.42+)
+
+โมดูล `src/run_session.h` — กู้คืนรอบซัก/อบหลัง ESP reboot
+
+## แก้คู่เสมอ
+
+- **ATD_TM_V3_New_Hier** + **ATD35_Melody_V3** logic เดียวกัน (UI ต่างได้)
+- Bump `fwversion[1]` เดียวกัน + `CHANGELOG.md` + `### Rollback` ทั้งคู่
+
+## พฤติกรรม
+
+| โหมด | LDR | หลัง grace 10 วิ |
+|------|-----|----------------|
+| ซัก (Mode ≠ 2) | ต้องสว่าง ≥2/3 sample | resume step/timer, ไม่ Power/Start ซ้ำ |
+| อบ (Mode 2) | ไม่ใช้ | กู้ timer + **`Dry(1)`** ค้าง relay |
+
+## NVS
+
+- Namespace แยก: `runSession` (ไม่ปน `config`)
+- **เขียนเมื่อ:** phase/step/flags เปลี่ยน (prepare, startup, running checkpoints); **โหมดอบ (Mode 2):** autosave timer ทุก 10 นาทีระหว่าง running (v3.46)
+- ล้างเมื่อ: จบรอบ (`chanel=10`), fault 00–02, Restart, factory restore
+
+## ห้าม
+
+- ใช้ LDR ตัดสิน resume บนเครื่องอบ
+- ข้าม `Dry(1)` หลังกู้คืนอบ (relay หลุดตอน reboot)
+- แก้ recovery ฝั่งเดียวโดยไม่พอร์ตอีกฝั่ง

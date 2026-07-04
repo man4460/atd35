@@ -1,0 +1,31 @@
+---
+description: คู่ firmware ATD_TM และ ATD35 — bump เวอร์ชันและเอกสารพร้อมกัน
+alwaysApply: true
+---
+
+# ATD_TM_V3_New_Hier + ATD35_Melody_V3 — ซิงก์เวอร์ชัน
+
+โปรเจกต์คู่ Melody ESP32:
+
+| โปรเจกต์ | บอร์ด | โฟลเดอร์ OTA ตัวอย่าง |
+|----------|--------|-------------------------|
+| `ATD_TM_V3_New_Hier` | TM1637 | `ai_new` |
+| `ATD35_Melody_V3` | ESP32-S3 touch | `ai_touch` |
+
+## บังคับทุกครั้งที่แก้ production firmware
+
+1. **เลขเวอร์ชันเดียวกัน** — `fwversion[1]` ใน `src/varable.h` ของทั้งสองโปรเจกต์ต้องตรงกัน (เช่น `Version 3.41`)
+2. **แก้คู่กัน** — ถ้าแก้ WiFi / MQTT / HTTP / OTA / crash / LDR ที่มีผลต่อเครื่องจริง ให้พอร์ตหรือแก้ logic ให้สอดคล้องในทั้งสอง repo (API เดียวกับ MelodyWebapp)
+3. **`CHANGELOG.md` ทั้งคู่** — เพิ่มหัวข้อ `## Version X.YY` ด้านบนสุดพร้อมกัน และ **ต้องมี `### Rollback`** ในแต่ละโปรเจกต์ (รายการไฟล์อาจต่างกันเล็กน้อยตามบอร์ด)
+4. **`STABILITY_NOTES.md`** — อัปเดตเมื่อแก้ network / reconnect / lwIP / mutex / deferred MQTT
+5. **สรุปในแชท** — ระบุเวอร์ชันใหม่ + ว่าอัปเดตทั้ง TM และ ATD35
+
+## ยกเว้น (ไม่บังคับคู่)
+
+- แก้เฉพาะ UI/LVGL บน ATD35 หรือเฉพาะ TM1637 บน TM โดยไม่กระทบ protocol/network — ยังควร bump เวอร์ชันทั้งคู่ถ้า deploy OTA ร่วมกัน
+
+## Rollback คู่โปรเจกต์
+
+เมื่อย้อนเวอร์ชัน ให้ย้อน **ทั้งสองโปรเจกต์** ไปเลขเดียวกัน แล้ว build/OTA แยกตามบอร์ด
+
+ดูรายละเอียดเพิ่ม: `.cursor/rules/firmware-version-rollback.mdc`

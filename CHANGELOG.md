@@ -1,0 +1,467 @@
+# ESP Firmware Changelog — ATD35_Melody_V3 (ESP32-S3)
+
+รูปแบบเวอร์ชัน: `Version X.YY` ใน `varable.h` → `fwversion[1]` (OTA / presence MQTT)  
+**ใช้เลขเวอร์ชันเดียวกับ ATD_TM_V3_New_Hier** (บอร์ด TM1637 vs ESP32-S3 แยกกันที่ `userID` / โฟลเดอร์ OTA เช่น `ai_new` vs `ai_touch`)
+
+---
+
+## Version 3.64 (2026-07-04)
+
+### Sync TM — bump คู่ (จอ TM คืนดีไซน์ 3.51)
+
+- ATD35 ไม่มี logic จอ TM1637 — bump เวอร์ชันคู่ให้ตรง
+
+### Rollback
+
+- ย้อนไป: **Version 3.63**
+- ไฟล์: `src/varable.h`
+
+---
+
+## Version 3.63 (2026-07-04)
+
+### Sync TM — bump คู่ (fix จอ TM กระพริบสลับ standby)
+
+- ATD35 ไม่มี logic จอ TM1637 — bump เวอร์ชันคู่ให้ตรง
+
+### Rollback
+
+- ย้อนไป: **Version 3.62**
+- ไฟล์: `src/varable.h`
+
+---
+
+## Version 3.62 (2026-07-04)
+
+### Sync TM — bump คู่ (fix จอ TM1637 regression 3.61)
+
+- ATD35 ไม่มี logic จอ TM1637 — bump เวอร์ชันคู่ให้ตรง
+
+### Rollback
+
+- ย้อนไป: **Version 3.61**
+- ไฟล์: `src/varable.h`
+
+---
+
+## Version 3.61 (2026-07-04)
+
+### Sync TM — ออกจาก setting ตอน start program + จอ timer อบ
+
+### Rollback
+
+- ย้อนไป: **Version 3.60**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.60 (2026-07-04)
+
+### Sync TM — taskWifiMqtt core 1 / TWDT fix หลัง OTA
+
+### Rollback
+
+- ย้อนไป: **Version 3.59**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.59 (2026-07-04)
+
+### OTA — แก้ "Written only : 16/…" (sync TM)
+
+- `suspendMachineTasksForOta()` + `pauseMqttForOta()` หลัง OtaStatus start + `otaWriteStreamWithRetry()`
+
+### MQTT — backoff หลังครบ 4 port + timeout 8s (sync TM)
+
+### Rollback
+
+- ย้อนไป: **Version 3.58**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.58 (2026-07-04)
+
+### Sync — MQTT/WiFi stability v3.58 (warmup/hysteresis/port rotate)
+
+- Bump เวอร์ชันคู่ ATD_TM — logic เดียวกันใน `main.cpp`
+
+### Rollback
+
+- ย้อนไป: **Version 3.57**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.57 (2026-07-04)
+
+### Sync — TM classic เท่านั้น, S3 อยู่ ATD35
+
+- Bump เวอร์ชันคู่ ATD_TM (ลบ esp32s3_tm / ai_new_s3 ฝั่ง TM1637)
+
+### Rollback
+
+- ย้อนไป: **Version 3.56**
+- ไฟล์: `src/varable.h`
+
+---
+
+## Version 3.56 (2026-07-04)
+
+### Sync — บอร์ดใหม่ TM รองรับ ESP32 classic + S3 แยก env
+
+- Bump เวอร์ชันคู่ ATD_TM (default `esp32dev`; S3 ใช้ `esp32s3_tm`)
+
+### Rollback
+
+- ย้อนไป: **Version 3.55**
+- ไฟล์: `src/varable.h`
+
+---
+
+## Version 3.55 (2026-07-04)
+
+### Sync — บอร์ดใหม่ TM บังคับ OTA ai_new_s3
+
+- Bump เวอร์ชันคู่ ATD_TM (OldBoard 0 = S3 + ai_new_s3)
+
+### Rollback
+
+- ย้อนไป: **Version 3.54**
+- ไฟล์: `src/varable.h`
+
+---
+
+## Version 3.54 (2026-07-04)
+
+### Sync เวอร์ชัน — OTA ai_new_s3 สำหรับ TM1637 บน ESP32-S3 (ฝั่ง ATD_TM)
+
+- Bump เวอร์ชันคู่ ATD_TM; โฟลเดอร์ OTA `ai_new_s3` + chip validation บน Melody backend
+- ATD35 ยังใช้ `ai_touch` เหมือนเดิม
+
+### Rollback
+
+- ย้อนไป: **Version 3.53**
+- ไฟล์: `src/varable.h`
+
+---
+
+## Version 3.53 (2026-07-04)
+
+### Task-hang WDT — boot grace + กัน millis underflow false trigger
+
+- **`hangElapsedMs()`** + **`BOOT_HANG_GRACE_MS` 60s** — งดเช็ค hang หลัง boot (WiFi/MQTT ต่อได้ก่อน)
+- ต้องมี `taskWifiMqtt_handle` ก่อนเช็ค wifi hang; log hb ตอน restart เพื่อ debug
+- Sync เวอร์ชันกับ ATD_TM (รวม env `esp32s3_tm` ฝั่ง TM)
+
+### Rollback
+
+- ย้อนไป: **Version 3.52**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.52 (2026-07-04)
+
+### Sync เวอร์ชันกับ ATD_TM — แก้จอ TM1637 ค้าง 0000 (เฉพาะบอร์ด TM)
+
+- การแก้ `primeBootStandbyDisplay` / handoff หลัง boot อยู่ที่ **ATD_TM_V3_New_Hier** (`main.cpp`) — ATD35 ใช้ LVGL ไม่ได้รับ diff นี้
+- Bump `fwversion[1]` คู่กันเพื่อ OTA ร่วม
+
+### Rollback
+
+- ย้อนไป: **Version 3.51**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเวอร์ชันเดียวกัน
+- ไฟล์ ATD35: `src/varable.h` (เวอร์ชันอย่างเดียว)
+
+---
+
+## Version 3.51 (2026-07-03)
+
+### กู้รอบเครื่องซัก — เข้า step ที่บันทึก โชว์ timer อยู่ chanel 0
+
+- state machine เครื่องซัก: countdown จริงอยู่ที่ `case 0`/chanel 0 กับ step 1/2/3 (chanel อื่นเป็น action ชั่วคราวที่วนกลับ case 0)
+- RESUMED handler สำหรับ wash: เข้า chanel 0 ที่ step เดิมจาก snapshot → `PENDING_UI_RESUME_RUN` โชว์หน้า run + timer จาก snapshot
+- **กันค้าง startup:** ถ้า reboot ช่วง `RS_WASH_STARTUP` (step ยังเป็น 0) จะกู้ที่ `chanel = 1` เพื่อรัน Power→Start ใหม่จน step ถูกตั้ง (กันค้างที่ chanel 0/step 0)
+- อบ (Mode 2) คง `chanel = 0` เหมือนเดิม
+
+### Rollback
+
+- ย้อนไป: **Version 3.50**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเวอร์ชันเดียวกัน
+- ไฟล์: `src/main.cpp` (handleRunSessionRecoveryChannel), `src/varable.h`
+
+---
+
+## Version 3.50 (2026-07-03)
+
+### WiFi/MQTT — กัน pbuf_free crash ตอน presence + UpdateState ชนกัน
+
+- **`teardownMqttOnWifiDown()`** — เมื่อ WiFi หลุด ตัด MQTT/TCP ทันที
+- **`UpdateState`** — คิวไป `processDeferredMqttWork` (publish+pump ครั้งเดียวต่อรอบ)
+- **`wifiLinkUsable()`** ก่อนส่ง MQTT status/config
+- **`postSQL`** — ลด pump เหลือ 1 รอบ
+
+### Task-hang watchdog — รีบูทกู้ตัวเองเมื่อ task ค้าง
+
+- heartbeat ต้นลูปทุก task; `loop()` เฝ้า: display/program > 2 นาที, wifi > 6 นาที (เผื่อ OTA) → `ESP.restart()`
+- **low-heap guard:** free heap < 10 KB ต่อเนื่อง 1 นาที → `ESP.restart()`
+- ข้ามระหว่าง OTA (`otaInProgress`); กู้รอบซัก/อบต่อด้วย run_session
+
+### กู้รอบหลังรีบูท — โชว์ timer ไม่ใช่ standby
+
+- เพิ่ม `PENDING_UI_RESUME_RUN` — recovery resume โชว์หน้า run (conS6) โดยไม่ `setStartMachine` (คง timer จาก snapshot)
+
+### Build fix — ให้คอมไพล์ผ่าน
+
+- เพิ่ม forward declaration: `tryLoadIdentityFromEeprom()`, `wifiLinkUsable()`
+- `varable.h`: `#define OldBoard 0` (บอร์ดใหม่) — `run_session.h` ใช้เลือก logic LDR
+
+### Rollback
+
+- ย้อนไป: **Version 3.49**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเวอร์ชันเดียวกัน
+- ไฟล์: `src/main.cpp`, `src/varable.h`, `STABILITY_NOTES.md`
+
+---
+
+## Version 3.49 (2026-06-29)
+
+### WiFi boot — non-blocking + `WiFi.disconnect(true)` หลัง fail
+
+- ลบ `WiFi_ini()` จาก setup; `connectwifi()` ใน `taskWifiMqtt` เท่านั้น
+- กัน stack ค้างหลัง connect timeout (TM + ATD35)
+
+### Rollback
+
+- ย้อนไป: **Version 3.48**
+- ไฟล์: `src/main.cpp`, `src/main.h`, `src/varable.h`
+
+---
+
+## Version 3.48 (2026-06-29)
+
+### Mode 2 (อบ) — นาทีส่วนเกินเมื่อหยอดครั้งแรกเกินราคาแพ็กสูงสุด
+
+- แพ็กสูงสุด + ยอดเกิน × อัตราต่อเวลา (10 บาท = 10 นาที ตาม `DRY_EXTEND_MIN_PER_COIN`)
+- `setStartMachine(dryFirstPaymentBaht)` — TM + ATD35 logic เดียวกัน
+
+### Rollback
+
+- ย้อนไป: **Version 3.47**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.47 (2026-06-29)
+
+### Boot — ย้าย ID จาก EEPROM ไป NVS ครั้งแรก (อัปเกรดจาก firmware เก่า)
+
+- ถ้า NVS ยังไม่มี `Noserial` → อ่านจาก EEPROM (layout เดิม addr 70/82/106/138) ก่อน
+- พบค่าใน EEPROM → ใช้ `Noserial`, `ssid`, `password`, `gid` แล้วบันทึก NVS
+- ไม่พบ → ใช้ค่า default จาก `varable.h` แล้วบันทึก NVS
+- ฟังก์ชัน: `tryLoadIdentityFromEeprom()` ใน `main.cpp` (TM + ATD35)
+
+### Rollback
+
+- ย้อนไป: **Version 3.46**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเวอร์ชันเดียวกัน
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+- NVS: ไม่ต้องล้าง
+
+---
+
+## Version 3.46 (2026-06-27)
+
+### Run session — Mode 2 autosave timer ทุก 10 นาที
+
+- `runSessionMaybeDryAutosave()` — โหมดอบบันทึก NVS ทุก 10 นาที
+- โหมดซัก: checkpoint เท่านั้น (v3.45)
+
+### Rollback
+
+- ย้อนไป: **Version 3.45**
+- ไฟล์: `src/run_session.h`, `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.45 (2026-06-27)
+
+### Run session — NVS เขียนเฉพาะเมื่อ step/phase เปลี่ยน
+
+- ลบ autosave ทุก 2 นาที — dedupe checkpoint ใน `runSessionSavePhase`
+- save ตอนเปลี่ยน step ใน `taskProgram` (drain/rin/spin, case 8/9)
+- อบ: timer ใน NVS อัปเดตตอนเริ่มอบเท่านั้น
+
+### Rollback
+
+- ย้อนไป: **Version 3.44**
+- ไฟล์: `src/run_session.h`, `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.44 (2026-06-27)
+
+### MQTT — ลด pbuf_free crash หลัง presence online
+
+- รวม deferred MQTT publish + pump ครั้งเดียวต่อรอบ `taskWifiMqtt`
+- ลบ `mqclient.loop()` ท้าย task
+- Run session autosave NVS 30s → 120s
+
+### Rollback
+
+- ย้อนไป: **Version 3.43**
+- ไฟล์: `src/main.cpp`, `src/run_session.h`, `src/varable.h`
+
+---
+
+## Version 3.43 (2026-06-27)
+
+### Run session — grace หลัง reboot 10 วิ (เดิม 5 วิ)
+
+- `RECOVERY_GRACE_MS` 5000 → **10000** ใน `src/run_session.h`
+
+### Rollback
+
+- ย้อนไป: **Version 3.42**
+- ไฟล์: `src/run_session.h`, `src/varable.h` (`fwversion` → 3.42)
+- NVS: ไม่ต้องล้าง
+
+---
+
+## Version 3.42 (2026-06-27)
+
+### Run session — กู้คืนรอบซัก/อบหลัง ESP reboot
+
+- **`src/run_session.h` (ใหม่):** บันทึกสถานะรอบลง NVS namespace `runSession`
+- Grace **5 วิ** ก่อนตรวจ LDR / สั่ง relay
+- **เครื่องซัก:** LDR สว่าง → resume step + timer (ไม่ Power/Start ซ้ำ)
+- **เครื่องอบ:** ไม่อ่าน LDR — กู้ timer + **`Dry(1)`** ค้าง relay (มีอยู่แล้วใน loop)
+- `chanel=99` recovery ใน `taskProgram`
+
+### Rollback
+
+- ย้อนไป: **Version 3.41**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเดียวกัน
+- ไฟล์: `src/run_session.h` (ลบ), `src/main.cpp`, `src/varable.h`
+- NVS: ลบ `runSession` ได้ถ้าต้องการ
+
+---
+
+## Version 3.41 (2026-06-22)
+
+### แก้ WiFi reconnect ค้าง warmup — MQTT ไม่กลับมาหลัง WiFi ต่อใหม่
+
+- เพิ่ม `noteWifiLinkUp()` ตั้ง `wifiConnectedSinceMs` เมื่อ WiFi กลับมา `WL_CONNECTED`
+- **`taskWifiMqtt`:** ถ้า `WiFi.isConnected()` แต่ `wifiConnectedSinceMs == 0` ให้เริ่ม warmup ทันที (เดิมเรียก `connectwifi()` เฉพาะตอน WiFi หลุด)
+- **`connectwifi()`:** ตั้ง warmup เมื่อต่อสำเร็จแม้ state ไม่ใช่ `WIFI_CONNECTING`
+- log warmup แสดงเวลาที่เหลือ (ms)
+
+### Rollback
+
+- ย้อนไป: **Version 3.40**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไป **3.40** พร้อมกัน
+- ไฟล์: `src/main.cpp` (`noteWifiLinkUp`, `connectwifi`, `taskWifiMqtt`), `src/varable.h` (`fwversion` → 3.40)
+- NVS: ไม่ต้องล้าง
+
+---
+
+## Version 3.40 (2026-06-20)
+
+### LDR — อ่านเสถียรขึ้นเมื่อไฟไม่สม่ำเสมอ (เครื่องทำงานปกติ)
+
+- **`LdrAvgSampler` / `readLDRAverage`:** ใช้ **median** แทนค่าเฉลี่ย + ตัด sample ต่ำกว่า 35 (glitch `avg=0`)
+- **Mode 1 หลัง Power (case 2):** เพิ่ม **`LdrPeakWindow`** — ผ่านถ้า `peak` หรือค่าปัจจุบันข้าม `ldr_set` (จับไฟกระพริบ; บอร์ด touch: `val <= ldr_set || peak <= ldr_set`)
+- ช่วงอ่าน LDR 700 ms, sample 10 ครั้ง
+
+---
+
+## Version 3.39 (2026-06-20)
+
+### แก้ pbuf_free crash ตอนสั่งโปรแกรม + LDR (หลัง v3.38)
+
+- **ห้าม `mqttPumpLoopLocked()` ใน MQTT callback** — defer `publishPresenceOnline` / `mqttDiag` หลัง reconnect ไป `processDeferredMqttWork()` ใน `taskWifiMqtt`
+- **`gNetMutex`** — ห้าม HTTP กับ MQTT พร้อมกัน (ครอบ `mqclient.loop/publish`, HTTPClient, reconnect)
+- **`sentVarjson()`** — ห่อ HTTP ด้วย `netLockEnter()`
+- **`subscribe(configResponse/...)`** — ใช้ buffer ถาวร แทน temporary `String`
+
+---
+
+## Version 3.38 (2026-06-20)
+
+### แก้ boot ค้าง warmup หลัง WiFi ต่อครั้งแรก
+
+- แก้เส้นทาง `WiFi_ini()` ให้ตั้ง `wifiConnectedSinceMs` และ reset `wifiReconnectBackoffMs`
+- เดิม `wifiLinkUsable()` ถูกปลดล็อกเฉพาะตอน reconnect ผ่าน `connectwifi()` ทำให้การต่อ WiFi ครั้งแรกหลัง boot ค้าง log `connected but warming up`
+- หลังแก้แล้ว boot path และ reconnect path ใช้หลัก `WiFi stable window` เหมือนกัน
+
+---
+
+## Version 3.37 (2026-06-20)
+
+### WiFi reconnect / pending balance - ลดโอกาสรีบูทเอง
+
+- เพิ่ม `wifiLinkUsable()` รอให้ WiFi ต่อค้างอย่างน้อย **4 วินาที** ก่อนเริ่ม MQTT / HTTP
+- เพิ่ม **backoff** ตอน `connectwifi()` fail: 1s -> 2s -> 4s ... สูงสุด 30s
+- เพิ่ม **backoff** ตอน `mqttreconnect()` fail: 5s -> 10s -> 20s ... สูงสุด 60s
+- ตัดการส่ง `pendingBalance` แบบ **HTTP + MQTT พร้อมกัน**: ถ้า MQTT ออนไลน์ส่ง MQTT อย่างเดียว, ถ้า MQTT ล่มจริงค่อย fallback เป็น HTTP
+- ระหว่าง WiFi เพิ่งกลับมา จะยังไม่เรียก `mqclient.loop()`, `pollMelodyDeviceHttp()`, `sendUpdateStateHttp()`
+
+---
+
+## Version 3.34 (2026-06-18)
+
+### OTA / MQTT — แก้ค้าง "กำลังอัพเดท 0%" และ HTTP fallback
+
+(ชุดเดียวกับ ATD_TM_V3_New_Hier v3.34)
+
+- **MQTT fail ก่อน HTTP fallback:** `MQTT_FAIL_STREAK_FALLBACK` 5 → **20** ครั้ง
+- **`sendOtaStatusMqtt`:** เพิ่ม `ensureMqttForOtaStatus()` — reconnect MQTT หลายรอบหลัง `pauseMqttForOta`
+- **OTA เวอร์ชันตรงกัน:** ส่ง `OtaStatus failed` + `"เวอร์ชันตรงกัน"`
+
+### อ้างอิง MelodyWebapp backend (ต้อง deploy คู่กัน)
+
+- HTTP OTA เปิด/ปิดจากแอดมิน — ปิดแล้วเปิดได้เฉพาะแอดมิน
+- ไม่ตั้ง updating ตอน HTTP ack; timeout updating ค้าง 15 นาที
+- ส่ง OTA ใน HTTP poll เมื่อ `fail_count >= 20` และ `httpOtaEnabled=true`
+
+---
+
+## Version 3.32 (2026-06-14)
+
+### LDR — อ่านค่าเสถียร ไม่ block MQTT / LVGL
+
+- เพิ่ม `src/ldr_sampler.h` (ชุดเดียวกับ ATD_TM_V3_New_Hier)
+  - `setupLdrAdc(LDR1_PIN, LDR2_PIN)`
+  - `LdrAvgSampler` — non-blocking
+  - `readLDRAverage()` — blocking สั้น
+- ใช้ sampler ใน:
+  - `checkLightStart()`
+  - `checkLdr1()` / `checkLdr2()` (แก้บั๊ก `checkLdr2` ใช้ `stateCheckLdr2`)
+  - `taskProgram` case 2 — ตรวจ power
+  - `taskProgram` step 3 — ตรวจ ldr จบโปรแกรม
+  - หน้าตั้งค่า LDR บน LVGL
+- ขา LDR: `LDR1_PIN=1`, `LDR2_PIN=2` (ESP32-S3)
+
+### อ้างอิง Melody backend
+
+- รหัสข้อผิดพลาด `00/01/02` → `maintenance` + label ไทยบนแดชบอร์ด
+
+---
+
+## Version 9.99 (ก่อนหน้า — ค่าพัฒนา)
+
+- Melody MQTT, OTA, LVGL UI
+- HTTP fallback: mqtt-report, device-ack, update-state
+
+---
+
+## วิธีอ่าน log ตอน boot
+
+Serial Monitor:
+
+```
+[FW] Current Firmware
+[FW] Version 3.34
+```

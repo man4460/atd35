@@ -1,0 +1,59 @@
+---
+description: บันทึกเวอร์ชันและ changelog ทุกครั้งที่แก้ ESP firmware เพื่อย้อนกลับได้
+globs: src/**/*,CHANGELOG.md,STABILITY_NOTES.md,platformio.ini
+alwaysApply: false
+---
+
+# ESP Firmware — บันทึกเวอร์ชันก่อน/หลังแก้ไข (ย้อนกลับได้)
+
+โปรเจกต์นี้ **ไม่มี git เป็นหลัก** — การย้อนกลับพึ่ง `CHANGELOG.md`, เลขเวอร์ชันใน `varable.h`, และไฟล์ที่แก้ชัดเจน
+
+## บังคับทุกครั้งที่แก้โค้ด firmware (bug fix / feature / refactor ที่มีผลต่อเครื่องจริง)
+
+1. **ก่อนแก้** — จดเวอร์ชันปัจจุบันจาก `src/varable.h` → `fwversion[1]` (เช่น `Version 3.40`)
+2. **หลังแก้เสร็จ** — **เพิ่ม patch version** ใน `varable.h` ทั้งสองบล็อก `#if OldBoard == 1` และ `#elif OldBoard == 0` ให้ตรงกัน
+3. **อัปเดต `CHANGELOG.md`** — เพิ่มหัวข้อใหม่ **ด้านบนสุด** (ใหม่กว่าอยู่บน) ตามรูปแบบด้านล่าง
+4. **แก้ MQTT / WiFi / OTA / crash** — อัปเดต `STABILITY_NOTES.md` สั้นๆ ด้วย
+5. **สรุปในแชท** — บอกเลขเวอร์ชันใหม่ + วิธีย้อน (เวอร์ชันก่อนหน้า + ไฟล์ที่เปลี่ยน)
+
+**ห้าม** แก้โค้ง production โดยไม่ bump เวอร์ชันและไม่เขียน CHANGELOG
+
+## โปรเจกต์คู่ ATD_TM + ATD35
+
+การแก้ firmware ที่มีผลต่อ WiFi / MQTT / HTTP / OTA / stability ต้อง **bump wversion เดียวกัน** และอัปเดต **CHANGELOG.md + ### Rollback ในทั้ง** ATD_TM_V3_New_Hier และ ATD35_Melody_V3 พร้อมกัน (ดู .cursor/rules/firmware-tm-atd35-sync.mdc)
+
+
+## รูปแบบ `CHANGELOG.md` (ต้องมีทุกครั้ง)
+
+```markdown
+## Version 3.41 (YYYY-MM-DD)
+
+### หัวข้อสั้น — ทำไมแก้
+
+- ไฟล์/ฟังก์ชัน: สิ่งที่เปลี่ยน
+- พฤติกรรมใหม่หรือที่แก้
+
+### Rollback
+
+- ย้อนไป: **Version 3.40**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเวอร์ชันเดียวกัน (build/OTA แยกตามบอร์ด)
+- ไฟล์ที่ต้องคืน: `src/main.cpp`, `src/varable.h`, ...
+- หมายเหตุ: ค่า NVS / OTA บนเครื่องจริงไม่ต้องล้าง (หรือระบุถ้าต้อง)
+```
+
+## เมื่อแก้หลายเรื่องในครั้งเดียว
+
+- แยกเป็นหลายเวอร์ชัน (3.41, 3.42) ถ้าแต่ละเรื่องย้อนกลับแยกได้
+- ถ้ารวม commit เดียว — ระบุใน Rollback ทุกไฟล์และพฤติกรรมที่เปลี่ยน
+
+## OTA / ทดสอบภาคสนาม
+
+- ระบุใน CHANGELOG ว่าต้อง deploy Melody backend คู่กันหรือไม่
+- หลัง flash ทดสอบ: บันทึก `controllerId` ตัวอย่าง + ผล (MQTT online/offline) ใน CHANGELOG หรือ `STABILITY_NOTES.md` ถ้าเป็น regression
+
+## ตัวอย่างการย้อนกลับ
+
+1. เปิด `CHANGELOG.md` หาเวอร์ชันเป้าหมาย (เช่น 3.40)
+2. คืนไฟล์ตามรายการใน `### Rollback` ของเวอร์ชันที่เกินมา (หรือใช้ backup / git ถ้ามี)
+3. ตั้ง `fwversion[1]` ใน `varable.h` ให้ตรงเวอร์ชันที่ย้อน
+4. Build + OTA ไฟล์ `firmware.bin` ของเวอร์ชันนั้น
