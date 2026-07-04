@@ -5,6 +5,158 @@
 
 ---
 
+## Version 3.76 (2026-07-04)
+
+### แก้ crash `pbuf_free: p->ref > 0` (recv ซ้อนข้าม task) + คืน keepAlive 60 (sync TM)
+
+- **สาเหตุ:** `updateWiFiIcon()` (taskDisplay/LVGL) เรียก `mqclient.connected()` → `recv()` พร้อมกับ `loop()` ใน taskWifiMqtt = อ่าน socket เดียวกัน 2 task → pbuf double-free → รีบูต
+- **แก้:** cache `volatile bool g_mqttOnline` (อัปเดตใน taskWifiMqtt); จอ + LVGL config อ่าน cache แทน + คืน `setKeepAlive(60)`
+- ไฟล์: `src/main.cpp`
+
+### Rollback
+
+- ย้อนไป: **Version 3.74**
+
+---
+
+## Version 3.75 (2026-07-04)
+
+### ทดลอง keepAlive 60→15 (แก้ MQTT หลุด rc=-4 ตอน idle, sync TM)
+
+- `setKeepAlive(15)` — ping ทุก 15s กัน broker/NAT ปิด TCP ตอน idle (rc=-4)
+- อยู่ระหว่างทดสอบหน้างาน; ถ้าไม่ดีขึ้นย้อนกลับ 60
+- ไฟล์: `src/main.cpp`
+
+### Rollback
+
+- ย้อนไป: **Version 3.74** (keepAlive 60)
+
+---
+
+## Version 3.74 (2026-07-04)
+
+### 5 นาทีสุดท้าย ส่ง UpdateState ทุก 1 นาที (sync TM)
+
+- เมื่อ `hrs==0 && minn<=5` → ส่งทุก 1 นาที (จากเดิมทุก 5 นาที) ให้เวลา ESP↔server ตรงกันสุด
+- ไฟล์: `src/main.cpp` (`machineRuning`)
+
+### Rollback
+
+- ย้อนไป: **Version 3.73**
+
+---
+
+## Version 3.73 (2026-07-04)
+
+### log RunSession save แสดงเวลาที่บันทึก (sync TM)
+
+- `[RunSession] save phase=X time=H:M:S` — เพิ่มเวลาจาก snapshot จริง
+- ไฟล์: `src/run_session.h`
+
+### Rollback
+
+- ย้อนไป: **Version 3.72**
+
+---
+
+## Version 3.72 (2026-07-04)
+
+### แก้ MQTT หลุดซ้ำทั้งที่ WiFi ยังต่อ (socket timeout 6→15 = ตรง 3.00) + log สาเหตุ (sync TM)
+
+- `setSocketTimeout(15)` + `client.setTimeout(15000)` — 6s ตัด socket เร็วไปตอน WiFi jitter → หลุดทั้งที่ยังต่อ (3.00 ใช้ default 15s)
+- เพิ่ม log `[MQTT] dropped rc=.. wifi=.. rssi=..` ตอน connected→disconnected เพื่อยืนยันสาเหตุหน้างาน
+
+### Rollback
+
+- ย้อนไป: **Version 3.71**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.71 (2026-07-04)
+
+### MQTT reconnect — backoff เบา 5→15s + เปลี่ยนพอร์ตหลัง fail 4 ครั้ง (sync TM)
+
+- อยู่พอร์ตเดิม fail ครบ 4 ครั้งค่อยหมุนพอร์ต; backoff 5→15s (cap 15s)
+- คงไว้: keepalive 60s, single-close (3.69)
+
+### Rollback
+
+- ย้อนไป: **Version 3.70**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.70 (2026-07-04)
+
+### MQTT reconnect กลับเป็น 3.00-style (sync TM)
+
+- `mqttreconnect()` retry คงที่ **5s** + หมุน port ทุก fail — ตัด exponential backoff (5→60s) ที่ทำให้ต่อกลับช้า
+- คงไว้: keepalive 60s, single-close (3.69)
+
+### Rollback
+
+- ย้อนไป: **Version 3.69**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.69 (2026-07-04)
+
+### แก้ crash lwIP `pbuf_free: p->ref > 0` (double-close socket) — sync TM
+
+- ปิด socket ครั้งเดียวใน `mqttreconnect()`, `teardownMqttOnWifiDown()`, `pauseMqttForOta()`: `if (connected) mqclient.disconnect(); else client.stop();`
+- กัน pbuf refcount เพี้ยน -> รีบูตกลางงาน
+
+### Rollback
+
+- ย้อนไป: **Version 3.68**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.68 (2026-07-04)
+
+### กู้รอบงานเฉพาะไฟดับเท่านั้น (sync TM)
+
+- `runSessionBeginRecovery()` กู้เฉพาะ `ESP_RST_POWERON` / `ESP_RST_BROWNOUT`; software/watchdog/crash/OTA → ล้าง snapshot ไม่กู้
+- ไฟล์: `src/run_session.h`
+
+### Rollback
+
+- ย้อนไป: **Version 3.67**
+- ไฟล์: `src/run_session.h`, `src/varable.h`
+
+---
+
+## Version 3.67 (2026-07-04)
+
+### watchdog เช็คห่างขึ้น 10 วิ (sync TM)
+
+- `loop()` เรียก `checkTaskHang()` ทุก **10 วิ** (เดิม 1 วิ)
+- ตอนทำงาน/เตรียม ไม่รีบูทเอง (3.66)
+
+### Rollback
+
+- ย้อนไป: **Version 3.66**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.66 (2026-07-04)
+
+### กันรีบูทเองระหว่างทำงาน (sync TM — เทียบ 3.00)
+
+- `checkTaskHang()` ข้ามการรีบูทเมื่อ `status_machine_run || status_machine_prepare` + feed heartbeat — ตอนรันไม่รีบูทเอง, idle ยังกู้ได้
+- คงไว้: boot grace, low-heap guard, taskWifiMqtt core 1
+
+### Rollback
+
+- ย้อนไป: **Version 3.65**
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+---
+
 ## Version 3.65 (2026-07-04)
 
 ### Sync TM — bump คู่ (TM คืนส่วนโปรแกรม/จอ ตาม 3.32)

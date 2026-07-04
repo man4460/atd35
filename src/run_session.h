@@ -166,7 +166,13 @@ inline void runSessionSavePhase(RunSessionPhase phase, bool force = false) {
   prefs.putBytes("snap", &s, sizeof(s));
   prefs.end();
   Serial.print(F("[RunSession] save phase="));
-  Serial.println(static_cast<int>(phase));
+  Serial.print(static_cast<int>(phase));
+  Serial.print(F(" time="));
+  Serial.print(s.hrs);
+  Serial.print(':');
+  Serial.print(s.minn);
+  Serial.print(':');
+  Serial.println(s.second);
 }
 
 inline void runSessionMaybeDryAutosave() {
@@ -252,6 +258,16 @@ inline bool runSessionLdrMachineRunning() {
 inline bool runSessionBeginRecovery(int stateShutdown) {
   if (stateShutdown == 1) {
     runSessionClear();
+    return false;
+  }
+  // กู้รอบงานเฉพาะเมื่อ "ไฟดับ" จริงเท่านั้น (power-on / brownout)
+  // รีบูตจาก software / watchdog / crash / OTA -> ไม่กู้ + ล้าง snapshot (กันระบบรวนจาก resume ผิดจังหวะ)
+  const esp_reset_reason_t rr = esp_reset_reason();
+  if (rr != ESP_RST_POWERON && rr != ESP_RST_BROWNOUT) {
+    runSessionClear();
+    Serial.print(F("[RunSession] skip recovery — reset reason="));
+    Serial.print((int)rr);
+    Serial.println(F(" (กู้เฉพาะไฟดับ POWERON/BROWNOUT)"));
     return false;
   }
   RunSessionSnapshot s;

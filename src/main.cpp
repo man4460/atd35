@@ -77,6 +77,10 @@ static void mqttPumpLoopLocked(int rounds = 3)
   }
 }
 
+// สถานะ MQTT online แบบ cache — อัปเดตเฉพาะใน taskWifiMqtt
+// task จอ (LVGL) อ่านค่านี้แทน mqclient.connected() ตรง ๆ กัน recv() ซ้อน loop() -> pbuf double-free crash
+volatile bool g_mqttOnline = false;
+
 Preferences preferences;
 WiFiClientSecure httpClient;  // สำหรับ HTTP state machine (Logic Apps / admin APIs)
 
@@ -875,8 +879,13 @@ void machineRuning(){
           }
         }
         // ส่ง status ไป UpdateState ทุก statusReportIntervalMinutes นาที (ค่าเริ่มต้น 5)
+        // แต่ 5 นาทีสุดท้าย (hrs==0 && minn<=5) ส่งทุก 1 นาที ให้เวลา ESP↔server ตรงกันมากที่สุด
         if (lastStatusReportMs == 0) lastStatusReportMs = millis();
-        if ((unsigned long)(millis() - lastStatusReportMs) >= (unsigned long)statusReportIntervalMinutes * 60 * 1000) {
+        const bool lastFiveMinutes = (hrs == 0 && minn <= 5);
+        const unsigned long reportIntervalMs =
+            lastFiveMinutes ? 60UL * 1000
+                            : (unsigned long)statusReportIntervalMinutes * 60 * 1000;
+        if ((unsigned long)(millis() - lastStatusReportMs) >= reportIntervalMs) {
           stateUpdateState = 1;
           lastStatusReportMs = millis();
         }
@@ -1046,9 +1055,11 @@ static void teardownMqttOnWifiDown()
   pendingMqttDiagAfterConnect = false;
   if (!netLockEnter())
     return;
+  // ปิดครั้งเดียว — disconnect() มี client.stop() ในตัว; อย่า stop() ซ้ำ (lwIP pbuf assert)
   if (mqclient.connected())
     mqclient.disconnect();
-  client.stop();
+  else
+    client.stop();
   netLockLeave();
 }
 
@@ -1327,8 +1338,22 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void mqttreconnect() {
   static unsigned long lastReconnectAttempt = 0;
-  static unsigned long reconnectInterval = 5000;
-  static uint8_t mqttPortsTried = 0;
+  static unsigned long reconnectInterval = 5000;   // backoff เบา 5→15s
+  static uint8_t mqttSamePortFails = 0;            // fail ติดกันในพอร์ตเดิม — ครบ 4 ค่อยเปลี่ยนพอร์ต
+
+  // วินิจฉัยสาเหตุหลุด: log ตอน connected -> disconnected (edge)
+  // rc=-3 CONNECTION_LOST (TCP ถูกตัด) / rc=-4 CONNECTION_TIMEOUT (ping ไม่ตอบ) / rc=-1 เราสั่ง disconnect
+  static bool mqttWasConnected = false;
+  bool mqttNowConnected = mqclient.connected();
+  if (mqttWasConnected && !mqttNowConnected) {
+    Serial.print(F("[MQTT] dropped rc="));
+    Serial.print(mqclient.state());
+    Serial.print(F(" wifi="));
+    Serial.print(WiFi.status());
+    Serial.print(F(" rssi="));
+    Serial.println(WiFi.RSSI());
+  }
+  mqttWasConnected = mqttNowConnected;
 
   if (!wifiLinkUsable()) {
     return;
@@ -1341,8 +1366,12 @@ void mqttreconnect() {
       if (!netLockEnter())
         return;
 
-      mqclient.disconnect();
-      client.stop();
+      // ปิด socket เก่าครั้งเดียว — อย่า double-close (disconnect() stop ในตัว + client.stop() ซ้ำ
+      // ทำ lwIP pbuf ref พัง -> assert "pbuf_free: p->ref > 0" -> รีบูตกลางงาน)
+      if (mqclient.connected())
+        mqclient.disconnect();
+      else
+        client.stop();
       vTaskDelay(pdMS_TO_TICKS(50));
       yield();
 
@@ -1361,11 +1390,11 @@ void mqttreconnect() {
       vTaskDelay(pdMS_TO_TICKS(1));
 
       mqclient.setServer(mqtt_server, mqtt_port);
-      mqclient.setKeepAlive(60);
+      mqclient.setKeepAlive(60);  // ตรงกับ 3.00 — keepAlive 15 พิสูจน์แล้วว่า drop ถี่ขึ้น + churn กระตุ้น crash
       mqclient.setCallback(callback);
-      mqclient.setSocketTimeout(6);
+      mqclient.setSocketTimeout(15);  // ตรงกับ 3.00 (default 15s) — 6s ตัด socket เร็วไปตอน WiFi jitter → หลุดทั้งที่ยังต่อ
       mqclient.setBufferSize(2048);
-      client.setTimeout(6000);
+      client.setTimeout(15000);
 
       topic = "V" + String(gid);
       // LWT : ถ้า ESP หลุดแบบไม่ตั้งใจ broker จะ publish presence offline ให้อัตโนมัติ
@@ -1394,38 +1423,26 @@ void mqttreconnect() {
           pendingMqttDiagFails = prevFails;
         }
         reconnectInterval = 5000;
-        mqttPortsTried = 0;
+        mqttSamePortFails = 0;
         Serial.println("MQTT connected : " + String(mqtt_port) + " subscribed : " + topic + " , " + String(configResponseTopicBuf));
       } else {
         lastMqttFailRc = mqclient.state();
         lastMqttFailPort = mqtt_port;
         mqttConnectFailStreak++;
-        if (mqttStatus == 1) {
+        mqttSamePortFails++;
+        // อยู่พอร์ตเดิมก่อน — fail ครบ 4 ครั้งค่อยเปลี่ยนพอร์ต; backoff เบา 5→15s; เปลี่ยนพอร์ตแล้วเริ่มใหม่ 5s
+        if (mqttStatus == 1 && mqttSamePortFails >= 4) {
+          mqttSamePortFails = 0;
           mqtt_port1++;
           if (mqtt_port1 >= 4745)
             mqtt_port1 = 4741;
-          mqttPortsTried++;
-          if (mqttPortsTried >= 4) {
-            mqttPortsTried = 0;
-            const unsigned long backoffCap =
-                (status_machine_run || status_machine_prepare)
-                    ? MQTT_RETRY_BACKOFF_RUN_MS
-                    : MQTT_RETRY_BACKOFF_MAX_MS;
-            reconnectInterval = min(reconnectInterval * 2, backoffCap);
-          } else {
-            reconnectInterval = 3000;
-          }
+          reconnectInterval = 5000;
         } else {
-          const unsigned long backoffCap =
-              (status_machine_run || status_machine_prepare)
-                  ? MQTT_RETRY_BACKOFF_RUN_MS
-                  : MQTT_RETRY_BACKOFF_MAX_MS;
-          reconnectInterval = min(reconnectInterval * 2, backoffCap);
+          reconnectInterval = min(reconnectInterval * 2, 15000UL);
         }
         Serial.print("MQTT connection failed, rc=");
         Serial.println(lastMqttFailRc);
-        Serial.println("Will try again in " + String(reconnectInterval / 1000) + "s, next port: " + String(mqtt_port1));
-        Serial.println("MQTT retry backoff(ms): " + String(reconnectInterval));
+        Serial.println("Will try again in " + String(reconnectInterval / 1000) + "s, port: " + String(mqtt_port1) + " (fail " + String(mqttSamePortFails) + "/4)");
       }
       vTaskDelay(pdMS_TO_TICKS(1));
       netLockLeave();
@@ -1437,7 +1454,7 @@ void updateWiFiIcon(){
   if((timerWifi == 0) || ((millis() < timerWifi) || ((millis() - timerWifi) > 500))){
     if(WiFi.isConnected()){
       lv_obj_clear_flag(ui_icon_wifi,LV_OBJ_FLAG_HIDDEN);
-      if (mqclient.connected()) {
+      if (g_mqttOnline) {  // อ่าน cache — ห้ามเรียก mqclient.connected() ใน task จอ (recv ซ้อน -> pbuf crash)
         lv_obj_clear_flag(ui_icon_mqtt,LV_OBJ_FLAG_HIDDEN);
       }else{
         if(!lv_obj_has_flag(ui_icon_mqtt, LV_OBJ_FLAG_HIDDEN)){
@@ -2469,7 +2486,7 @@ void setup() {
     passStr = String(lv_textarea_get_text(ui_tx_wifi_pass));
     writePreferencesfirst();
 
-    if (mqclient.connected())
+    if (g_mqttOnline)  // LVGL callback = task จอ — อ่าน cache กัน recv ซ้อน
       PublishConfigViaMqtt();
 
     WiFi.disconnect();
@@ -2931,9 +2948,12 @@ static void pauseMqttForOta()
     if (mqclient.connected())
     {
       Serial.println(F("[OTA] pause MQTT"));
-      mqclient.disconnect();
+      mqclient.disconnect();  // client.stop() อยู่ในตัวแล้ว
     }
-    client.stop();
+    else
+    {
+      client.stop();  // ปิดครั้งเดียว — อย่า double-close (lwIP pbuf assert)
+    }
     netLockLeave();
   }
   delay(50);
@@ -3504,6 +3524,7 @@ bool pollMelodyDeviceHttp() {
 void taskWifiMqtt(void *parameter){
   while (true){
     hbWifiMs = millis();  // heartbeat สำหรับ task-hang watchdog
+    g_mqttOnline = mqclient.connected();  // cache ให้ task จอ อ่าน (กัน recv ซ้อน -> pbuf crash)
     if (state_wifi_on){
       otiUdate();
       httpJobStep(); // ทำ HTTP jobs ทีละขั้นแบบ non-blocking
@@ -3692,6 +3713,14 @@ static void checkTaskHang()
     return;
   }
 
+  // เครื่องกำลังทำงาน/เตรียม -> ห้ามรีบูทเองเด็ดขาด (ตรงพฤติกรรม 3.00 ที่ไม่มี watchdog)
+  // กันตัดกลางรอบจาก false-trigger; feed heartbeat กันค้างสะสมแล้วรีบูทหลังจบงาน
+  if (status_machine_run || status_machine_prepare)
+  {
+    hbDisplayMs = hbProgramMs = hbWifiMs = now;
+    return;
+  }
+
   // heap ต่ำวิกฤติต่อเนื่อง (fragmentation ระยะยาว) -> รีบูทกัน alloc fail/crash
   static unsigned long lowHeapSinceMs = 0;
   if (ESP.getFreeHeap() < LOW_HEAP_CRITICAL_BYTES)
@@ -3746,9 +3775,10 @@ void loop() {
     applyPendingUI(); // แสดงข้อความจาก commandApp/otiUdate หลังลบ taskDisplay
     Display.loop();   // Keep GUI work ระหว่าง OTA
   }
+  // เช็คทุก 10 วิ (ไม่ต้องถี่ 1 วิ) ลดโอกาสรีบูทเอง; ตอนเครื่องทำงาน checkTaskHang จะไม่รีบูทอยู่แล้ว
   static unsigned long lastHangCheckMs = 0;
   unsigned long now = millis();
-  if ((unsigned long)(now - lastHangCheckMs) >= 1000)
+  if ((unsigned long)(now - lastHangCheckMs) >= 10000)
   {
     lastHangCheckMs = now;
     checkTaskHang();
