@@ -45,7 +45,7 @@ int coinPulse = 30;
 String ssidStr = "melody";
 String passStr = "0815418771";
 
-const char* fwversion[] = {"Current Firmware\r\n", "Version 3.78\r\n"};
+const char* fwversion[] = {"Current Firmware\r\n", "Version 3.79\r\n"};
 // v3.50: recovery dry -> PENDING_UI_RESUME_RUN โชว์ timer แทน standby
 
 //esp32time
@@ -65,6 +65,10 @@ int price[] = {30,40,50};
 int pricePro[] = {40,50,60};
 int PriceShow[] = {30,40,50};
 int item_price = 0;
+// รายรับส่งทาง HTTP แบบ idempotent — batch ที่กำลังส่ง (freeze amount+txnId ตอนเริ่มส่ง)
+int revSendingAmount = 0; // ยอดของ batch ที่ freeze ไว้ส่ง (0 = ยังไม่ freeze)
+String revSendingTxn = ""; // txnId ของ batch ที่กำลังส่ง (idempotency key)
+unsigned long revTxnSeq = 0; // ตัวนับ txn ต่อเครื่อง (persistent) เพื่อสร้าง txnId ไม่ซ้ำ
 int pendingBalance = 0;   // เธขเธญเธ”เธฃเธฒเธขเธฃเธฑเธเธ—เธตเนเธขเธฑเธเธชเนเธเธเธถเนเธเน€เธเธดเธฃเนเธเน€เธงเธญเธฃเนเนเธกเนเธชเธณเน€เธฃเนเธ (เนเธเนเน€เธเนเธ buffer เธฃเธงเธกเธ—เธธเธเธเนเธญเธเธ—เธฒเธเธเนเธฒเธข)
 int chanelPay = 0; bool chanelcoinStatus = false;
 int minn_countdown_wait = 0;
@@ -203,6 +207,8 @@ int port = 80;
 String Path_MqttReport = "/public/machines/mqtt-report";
 String Path_DeviceAck = "/public/machines/device-ack";
 String Path_UpdateState = "/public/machines/update-state";
+/** รายรับทาง HTTP (แทน MQTT postSQL) — idempotent ด้วย txnId กันซ้ำตอน retry */
+String Path_DeviceRevenue = "/public/machines/device-revenue";
 String melodyServer = "backend.ma-well.com";
 int melodyPort = 80;
 long contentLength = 0;

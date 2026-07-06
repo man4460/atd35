@@ -5,6 +5,28 @@
 
 ---
 
+## Version 3.79 (2026-07-06)
+
+### รายรับส่งทาง HTTP (idempotent) แทน MQTT postSQL + กัน MQTT flap ทำ loop() ขาด (sync กับ TM)
+
+- **อาการ:** เครื่องออนไลน์/ออฟไลน์ตลอด — MQTT `dropped rc=-4` วนซ้ำ (RSSI ดี, connect สำเร็จ = ping timeout) → รายรับผ่าน MQTT `postSQL` (QoS0) เสี่ยงหาย
+- **A — รายรับผ่าน HTTP:**
+  - Backend (ร่วมกับ TM): `POST /public/machines/device-revenue` — reuse `recordDeviceRevenue()` (dedup เดิม) + idempotency key `txnId` (`description="txn:<id>"`)
+  - Firmware: รายรับส่ง HTTP เป็นหลัก (`sendRevenueHttp`) buffer+retry จน 2xx + `txnId` persistent + persist NVS namespace `revenue` (กู้หลัง reboot) — เลิกใช้ MQTT postSQL/UpdateBalanceV3 สำหรับรายรับ
+- **B — กัน flap แย่ลง (ไม่แตะ keepAlive/socketTimeout/port):**
+  - throttle ส่งรายรับ HTTP ทุก 4s + pump `mqclient.loop()` ต้นรอบด้วย `netLockTryEnter(30ms)` รับประกัน cadence keepalive
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+- **ต้อง deploy backend คู่กัน** (endpoint ใหม่)
+
+### Rollback
+
+- ย้อนไป: **Version 3.78** (ATD35 git `4c0b028` / TM `f34a4f2`)
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเดียวกัน
+- ไฟล์ที่ต้องคืน: `src/main.cpp`, `src/varable.h`; Backend revert `device-revenue` endpoint
+- หมายเหตุ: NVS namespace `revenue` ไม่ต้องล้าง
+
+---
+
 ## Version 3.78 (2026-07-05)
 
 ### sync version กับ TM (ไม่มีการแก้โค้ด ATD35)

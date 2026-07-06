@@ -59,6 +59,14 @@ static bool netLockEnter()
   return xSemaphoreTakeRecursive(gNetMutex, pdMS_TO_TICKS(12000)) == pdTRUE;
 }
 
+/** จับ net lock แบบไม่บล็อกนาน — ใช้กับ MQTT pump ต้นรอบ เพื่อไม่ให้ taskWifiMqtt ค้างรอ lock */
+static bool netLockTryEnter(uint32_t ms)
+{
+  if (!gNetMutex)
+    return true;
+  return xSemaphoreTakeRecursive(gNetMutex, pdMS_TO_TICKS(ms)) == pdTRUE;
+}
+
 static void netLockLeave()
 {
   if (gNetMutex)
@@ -111,6 +119,8 @@ void restoreMachineTasksAfterOta();
 static bool tryLoadIdentityFromEeprom();  // forward declaration (defined later)
 void taskDisplay(void *parameter);
 void taskProgram(void *parameter);
+static void revenuePersist();
+static void revenueRestore();
 /** MQTT presence/LWT — topic presence/{Noserial} สำหรับ MelodyWebapp */
 bool publishPresenceOnline();
 void publishPresenceOfflineGraceful();
@@ -630,6 +640,7 @@ void updateBalanceIncreateDry()
       pendingBalance += priceSentVerver;
       priceSentVerver = 0;
       stateSentPriceServer = 1; // ขอให้ taskWifiMqtt ส่งเมื่อออนไลน์
+      revenuePersist();         // กันยอดหายถ้า reboot ก่อนส่ง
     }
   }
 }
@@ -649,6 +660,7 @@ void count_update(){
       lv_obj_clear_flag(ui_conS6,LV_OBJ_FLAG_HIDDEN);
       pendingBalance += paidTotal;
       stateSentPriceServer = 1;
+      revenuePersist();         // กันยอดหายถ้า reboot ก่อนส่ง
       setStartMachine((Mode == 2 && program >= 1 && program <= 3) ? paidTotal : 0);
       item_price = 0;
       priceSentVerver = 0;
@@ -1762,6 +1774,7 @@ void applyPendingUI() {
       lv_obj_clear_flag(ui_conS6, LV_OBJ_FLAG_HIDDEN);
       pendingBalance += item_price;
       stateSentPriceServer = 1;
+      revenuePersist();         // กันยอดหายถ้า reboot ก่อนส่ง
       if (status_machine_run && stateIntime) {
         stateIntime = false;
         int increaseTime = 10;
@@ -2356,6 +2369,7 @@ void setup() {
   setupWaitAdminRestoreFactory();  // กดปุ่ม BOOT = คืนค่าโรงงาน (ก่อนอ่าน Preferences)
   readPreferencesfirst();
   readPreferences();
+  revenueRestore(); // กู้ยอดรายรับค้าง (pendingBalance/txn) จาก NVS ถ้า reboot ก่อนส่งสำเร็จ
   if(SetupData == 1){
     SetupData = 0;
     writePreferences();
@@ -3477,6 +3491,72 @@ static bool sendUpdateStateHttp() {
   return code == 200 || code == 201;
 }
 
+// ===== รายรับทาง HTTP (idempotent) — แทน MQTT postSQL เพื่อไม่ให้ข้อมูลหายตอน MQTT flap =====
+// ใช้ Preferences object แยก (namespace "revenue") ต่อครั้ง — NVS driver ล็อกภายใน จึงปลอดภัยข้าม task
+static void revenuePersist()
+{
+  Preferences p;
+  if (!p.begin("revenue", false))
+    return;
+  p.putInt("pendBal", pendingBalance);
+  p.putInt("sendAmt", revSendingAmount);
+  p.putString("sendTxn", revSendingTxn);
+  p.putULong("txnSeq", revTxnSeq);
+  p.end();
+}
+
+static void revenueRestore()
+{
+  Preferences p;
+  if (!p.begin("revenue", true))
+    return;
+  pendingBalance = p.getInt("pendBal", 0);
+  revSendingAmount = p.getInt("sendAmt", 0);
+  revSendingTxn = p.getString("sendTxn", "");
+  revTxnSeq = p.getULong("txnSeq", 0);
+  p.end();
+  if (pendingBalance > 0 || revSendingAmount > 0)
+  {
+    stateSentPriceServer = 1; // มียอดค้างจากก่อน reboot — ส่งต่อ (idempotent จาก txn เดิม)
+    Serial.println("[REV] restore pending=" + String(pendingBalance) +
+                   " sending=" + String(revSendingAmount) + " txn=" + revSendingTxn);
+  }
+}
+
+// txnId ไม่ซ้ำต่อเครื่อง: <Noserial>-<seq> (seq persistent) — retry ใช้ค่าเดิมเพื่อ idempotent
+static String revenueMakeTxnId()
+{
+  revTxnSeq++;
+  return Noserial + "-" + String(revTxnSeq);
+}
+
+// ส่งรายรับทาง HTTP device-revenue — คืน true เมื่อ backend รับ (created หรือ duplicate = idempotent)
+static bool sendRevenueHttp(int amount, const String &txnId, const char *source)
+{
+  if (!wifiLinkUsable())
+    return false;
+  if (!netLockEnter())
+    return false;
+  HTTPClient http;
+  http.begin(melodyHttpUrl(Path_DeviceRevenue));
+  http.setTimeout(8000);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Connection", "close");
+  StaticJsonDocument<256> doc;
+  doc["api_key"] = api_key;
+  doc["controller_id"] = Noserial;
+  doc["amount"] = amount;
+  doc["source"] = source;
+  doc["txnId"] = txnId;
+  String body;
+  serializeJson(doc, body);
+  int code = http.POST(body);
+  http.end();
+  netLockLeave();
+  Serial.println(String("[REV] http device-revenue code=") + code + " amount=" + amount + " txn=" + txnId);
+  return code == 200 || code == 201;
+}
+
 // เรียกตอน WiFi ต่อแต่ MQTT ล่มจริง (fail > 20 ครั้ง) — POST machines/mqtt-report (throttle ทุก 1 นาที)
 bool pollMelodyDeviceHttp() {
   if (isMelodyBootSetupPhase()) return false;
@@ -3525,6 +3605,16 @@ void taskWifiMqtt(void *parameter){
   while (true){
     hbWifiMs = millis();  // heartbeat สำหรับ task-hang watchdog
     g_mqttOnline = mqclient.connected();  // cache ให้ task จอ อ่าน (กัน recv ซ้อน -> pbuf crash)
+    // pump keepalive ต้นรอบด้วย lock สั้น — รับประกัน mqclient.loop() ถูกเรียกสม่ำเสมอ
+    // (กันกรณี deferred work ติด lock นาน -> PINGRESP ไม่ถูกอ่าน -> drop rc=-4)
+    if (mqclient.connected())
+    {
+      if (netLockTryEnter(30))
+      {
+        mqclient.loop();
+        netLockLeave();
+      }
+    }
     if (state_wifi_on){
       otiUdate();
       httpJobStep(); // ทำ HTTP jobs ทีละขั้นแบบ non-blocking
@@ -3629,26 +3719,32 @@ void taskWifiMqtt(void *parameter){
           // MQTT หลุดแต่ยังไม่เกิน 20 ครั้ง → คง flag ไว้ รอ mqttreconnect ก่อน (MQTT-first)
         }
 
-        if (stateSentPriceServer && pendingBalance > 0){
+        static unsigned long lastRevSendMs = 0;
+        if (stateSentPriceServer && pendingBalance > 0 &&
+            (lastRevSendMs == 0 || (unsigned long)(millis() - lastRevSendMs) >= 4000)){
+          lastRevSendMs = millis();
           if (statewifi){
-            bool ok = false;
-            if (mqclient.connected()) {
-              String msg = "{\"idEsp\":\"" + Noserial + "\",\"idUser\":\"" + String(gid) + "\",\"idBranch\":\"" + String(gid) + "\",\"price\":\"" + String(pendingBalance) + "\",\"typePay\":\"" + String("0") + "\"}";
-              if (netLockEnter()) {
-                ok = mqclient.publish("postSQL", msg.c_str());
-                mqttPumpLoopLocked(1);
-                netLockLeave();
-              }
-            } else if (mqttDownForFallback()) {
-              ok = UpdateBalanceV3(pendingBalance);
+            // ส่งรายรับทาง HTTP เป็นหลัก (idempotent ด้วย txnId) — ไม่หายแม้ MQTT flap
+            // freeze batch ปัจจุบัน (amount+txnId) ครั้งเดียว: coin ที่หยอดเพิ่มระหว่างส่งจะไปอยู่ batch ถัดไป
+            // throttle 4s: กันยิง HTTP ถี่จนถือ net lock บ่อย -> mqclient.loop() ขาด (กัน MQTT flap แย่ลง)
+            if (revSendingTxn == "" || revSendingAmount <= 0) {
+              revSendingAmount = pendingBalance;
+              revSendingTxn = revenueMakeTxnId();
+              revenuePersist();
             }
-
+            bool ok = sendRevenueHttp(revSendingAmount, revSendingTxn, "coin");
             if (ok){
-              Serial.println("Send pending balance success. Clear buffer.");
-              pendingBalance = 0;
-              stateSentPriceServer = false;
+              pendingBalance -= revSendingAmount;
+              if (pendingBalance < 0)
+                pendingBalance = 0;
+              Serial.println("[REV] sent OK amount=" + String(revSendingAmount) + " remain=" + String(pendingBalance));
+              revSendingAmount = 0;
+              revSendingTxn = "";
+              if (pendingBalance == 0)
+                stateSentPriceServer = false;
+              revenuePersist();
             }else{
-              Serial.println("Send pending balance failed. Will retry later.");
+              Serial.println("[REV] send failed, will retry (txn=" + revSendingTxn + ")");
             }
           }
         }

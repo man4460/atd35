@@ -1,6 +1,12 @@
 # Stability Notes — ATD35_Melody_V3
 
-อัปเดตล่าสุด: `Version 3.58`
+อัปเดตล่าสุด: `Version 3.79`
+
+## v3.79 — รายรับ HTTP idempotent + กัน MQTT flap ทำ loop() ขาด (sync กับ TM)
+
+- รายรับส่ง HTTP เป็นหลัก (`POST /public/machines/device-revenue`) แทน MQTT `postSQL` — idempotency key `txnId` persistent + persist NVS namespace `revenue` (กู้หลัง reboot) → retry ไม่ทำรายรับซ้ำ
+- กัน flap: throttle ส่งรายรับ HTTP 4s + pump `mqclient.loop()` ต้นรอบ `netLockTryEnter(30ms)` — ไม่แตะ keepAlive/socketTimeout/port
+- ยังเปิด: root cause `rc=-4` idle (broker DDNS/NAT) — A ทำให้รายรับปลอดภัยแม้ flap
 
 ## สิ่งที่ harden แล้ว
 
