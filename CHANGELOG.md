@@ -5,6 +5,22 @@
 
 ---
 
+## Version 3.84 (2026-07-07)
+
+### กลับไปโมเดลเน็ต v3.78 (ตอบสนองดี) + เก็บเฉพาะ HTTP revenue (sync กับ TM)
+
+- **ทำไม:** v3.80–3.83 (keepAlive 90s + ย้าย `mqclient.loop()` เข้า `loop()` single-thread + no-op mutex) ทำให้สั่งการ MQTT ไม่ตอบสนอง — ยืนยันว่า v3.78 ตอบสนองดีกว่า
+- **ทำอะไร:** revert WiFi/MQTT servicing กลับเป็น **v3.78 เป๊ะ** (`taskWifiMqtt` เดิม, `gNetMutex` recursive, keepAlive 60s) + เติมกลับเฉพาะ **HTTP revenue** จาก v3.79
+- **ตัดออกจาก v3.79:** `netLockTryEnter()` helper + pump `mqclient.loop()` ต้นรอบ `taskWifiMqtt` → cadence keepalive เท่า v3.78
+- **เก็บไว้:** `sendRevenueHttp()` + `txnId` idempotent, persist NVS `revenue`, `revenueRestore()` boot, throttle 4s, endpoint `POST /public/machines/device-revenue`
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+### Rollback
+
+- ย้อนไป **v3.78** = `4c0b028` หรือ **v3.79** (มี pump/tryEnter) = `c4cecc4`
+
+---
+
 ## Version 3.79 (2026-07-06)
 
 ### รายรับส่งทาง HTTP (idempotent) แทน MQTT postSQL + กัน MQTT flap ทำ loop() ขาด (sync กับ TM)

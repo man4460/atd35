@@ -59,14 +59,6 @@ static bool netLockEnter()
   return xSemaphoreTakeRecursive(gNetMutex, pdMS_TO_TICKS(12000)) == pdTRUE;
 }
 
-/** จับ net lock แบบไม่บล็อกนาน — ใช้กับ MQTT pump ต้นรอบ เพื่อไม่ให้ taskWifiMqtt ค้างรอ lock */
-static bool netLockTryEnter(uint32_t ms)
-{
-  if (!gNetMutex)
-    return true;
-  return xSemaphoreTakeRecursive(gNetMutex, pdMS_TO_TICKS(ms)) == pdTRUE;
-}
-
 static void netLockLeave()
 {
   if (gNetMutex)
@@ -3605,16 +3597,6 @@ void taskWifiMqtt(void *parameter){
   while (true){
     hbWifiMs = millis();  // heartbeat สำหรับ task-hang watchdog
     g_mqttOnline = mqclient.connected();  // cache ให้ task จอ อ่าน (กัน recv ซ้อน -> pbuf crash)
-    // pump keepalive ต้นรอบด้วย lock สั้น — รับประกัน mqclient.loop() ถูกเรียกสม่ำเสมอ
-    // (กันกรณี deferred work ติด lock นาน -> PINGRESP ไม่ถูกอ่าน -> drop rc=-4)
-    if (mqclient.connected())
-    {
-      if (netLockTryEnter(30))
-      {
-        mqclient.loop();
-        netLockLeave();
-      }
-    }
     if (state_wifi_on){
       otiUdate();
       httpJobStep(); // ทำ HTTP jobs ทีละขั้นแบบ non-blocking

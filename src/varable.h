@@ -45,7 +45,7 @@ int coinPulse = 30;
 String ssidStr = "melody";
 String passStr = "0815418771";
 
-const char* fwversion[] = {"Current Firmware\r\n", "Version 3.79\r\n"};
+const char* fwversion[] = {"Current Firmware\r\n", "Version 3.84\r\n"};
 // v3.50: recovery dry -> PENDING_UI_RESUME_RUN โชว์ timer แทน standby
 
 //esp32time
