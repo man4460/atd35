@@ -5,6 +5,32 @@
 
 ---
 
+## Version 3.78 (2026-07-05)
+
+### sync version กับ TM (ไม่มีการแก้โค้ด ATD35)
+
+- TM: Mode 3/4 hier อ่าน LDR แบบ blocking ให้จังหวะเปลี่ยนรีเลย์สม่ำเสมอ
+- ATD35 ไม่มี SetFirstHier — bump เวอร์ชันให้ตรงกันเท่านั้น
+
+### Rollback
+
+- ย้อนไป: **Version 3.77**
+
+---
+
+## Version 3.77 (2026-07-05)
+
+### sync version กับ TM (ไม่มีการแก้โค้ด ATD35)
+
+- TM: Mode 3/4 hier เดินเร็วขึ้น (SetFirstHier actionGap 500→100, LDR 10→4 ค่า)
+- ATD35 ไม่มี SetFirstHier — bump เวอร์ชันให้ตรงกันเท่านั้น
+
+### Rollback
+
+- ย้อนไป: **Version 3.76**
+
+---
+
 ## Version 3.76 (2026-07-04)
 
 ### แก้ crash `pbuf_free: p->ref > 0` (recv ซ้อนข้าม task) + คืน keepAlive 60 (sync TM)
