@@ -1,7 +1,7 @@
 #ifndef VARABLE_H_
 #define VARABLE_H_
 
-// ESP32-S3 touch — OTA ai_touch
+// ESP32-S3 touch — OTA ai_touch (TCP) / wss_touch (Melody v4 WSS)
 #define OldBoard 0
 
 #define WiFi_TIMEOUT_MS 20000
@@ -10,7 +10,7 @@
 //  DEPLOY CONFIG — แก้เฉพาะบล็อกนี้ก่อน pio run / flash
 // =============================================================================
 
-const char* fwversion[] = {"Current Firmware\r\n", "Version 3.91\r\n"};
+const char* fwversion[] = {"Current Firmware\r\n", "Version 3.92\r\n"};
 
 // --- ตัวเครื่อง / Melody ---
 int gid = 99;
@@ -18,7 +18,11 @@ String Noserial = "65M000000";
 String IDserver = "94";
 int CodeMachine = 0;
 int Mode = 2;
+#if MQTT_USE_WEBSOCKET
+String userID = "wss_touch"; // OTA → fw/wss_touch/ (S3 — แยกจาก wss_new ของ TM classic)
+#else
 String userID = "ai_touch"; // OTA → fw/ai_touch/
+#endif
 
 // --- WiFi เริ่มต้น ---
 String ssidStr = "melody";
