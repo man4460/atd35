@@ -9,6 +9,10 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include "varable.h"
+#if MQTT_USE_WEBSOCKET
+#include <WebSocketsClient.h>
+#include "mqtt_ws_client.h"
+#endif
 #include "ldr_sampler.h"
 #include "run_session.h"
 #include <EEPROM.h>
@@ -46,9 +50,73 @@ static bool hangElapsedMs(unsigned long now, unsigned long since, unsigned long 
   return (unsigned long)(now - since) > limitMs;
 }
 
-//Object
+//Object — TCP หรือ WebSocket ตาม MQTT_USE_WEBSOCKET ใน varable.h
+#if MQTT_USE_WEBSOCKET
+static WebSocketsClient mqttWebSocket;
+static MqttWsWifiClient mqttWsClient(mqttWebSocket);
+
+static void mqttTransportLoop()
+{
+  mqttWebSocket.loop();
+}
+
+static void mqttTransportStop()
+{
+  mqttWsClient.clearRx();
+  mqttWebSocket.disconnect();
+}
+
+static bool mqttWsEnsureConnected()
+{
+  mqttWsClient.attachEventHandler();
+
+  if (mqttWebSocket.isConnected())
+    return true;
+
+  mqttWsClient.clearRx();
+  mqttWebSocket.setReconnectInterval(5000);
+  mqttWebSocket.enableHeartbeat(15000, 3000, 2);
+
+#if MQTT_WS_USE_SSL
+  mqttWebSocket.beginSSL(mqtt_ws_host, mqtt_ws_port, mqtt_ws_path, NULL, "mqtt");
+  Serial.print(F("[MQTT-WS] WSS "));
+#else
+  mqttWebSocket.begin(mqtt_ws_host, mqtt_ws_port, mqtt_ws_path, "mqtt");
+  Serial.print(F("[MQTT-WS] WS "));
+#endif
+  Serial.print(mqtt_ws_host);
+  Serial.print(':');
+  Serial.println(mqtt_ws_port);
+
+  const unsigned long deadline = millis() + 15000UL;
+  while (!mqttWebSocket.isConnected() && (long)(millis() - deadline) < 0)
+  {
+    mqttWebSocket.loop();
+    yield();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  if (!mqttWebSocket.isConnected())
+  {
+    Serial.println(F("[MQTT-WS] handshake failed"));
+    return false;
+  }
+  Serial.println(F("[MQTT-WS] connected"));
+  return true;
+}
+
+PubSubClient mqclient(mqttWsClient);
+#else
 WiFiClient client;
+
+static void mqttTransportLoop() {}
+
+static void mqttTransportStop()
+{
+  client.stop();
+}
+
 PubSubClient mqclient(client);
+#endif
 /** ล็อก lwIP — ห้าม HTTP กับ MQTT พร้อมกัน (กัน assert pbuf_free บน ESP32) */
 static SemaphoreHandle_t gNetMutex = nullptr;
 
@@ -65,18 +133,6 @@ static void netLockLeave()
     xSemaphoreGiveRecursive(gNetMutex);
 }
 
-/** เรียกเมื่อถือ net lock อยู่แล้ว */
-static void mqttPumpLoopLocked(int rounds = 3)
-{
-  if (!mqclient.connected())
-    return;
-  for (int i = 0; i < rounds; i++)
-  {
-    mqclient.loop();
-    vTaskDelay(1);
-  }
-}
-
 // สถานะ MQTT online แบบ cache — อัปเดตเฉพาะใน taskWifiMqtt
 // task จอ (LVGL) อ่านค่านี้แทน mqclient.connected() ตรง ๆ กัน recv() ซ้อน loop() -> pbuf double-free crash
 volatile bool g_mqttOnline = false;
@@ -86,6 +142,77 @@ WiFiClientSecure httpClient;  // สำหรับ HTTP state machine (Logic Ap
 
 ESP32Time rtc(0);  // offset in seconds GMT
 struct tm timeinfo;
+
+/** Serial prefix สำหรับวินิจฉัย MQTT — uptime + RTC */
+static void mqttLogPrefix()
+{
+  const unsigned long upMs = millis();
+  Serial.print(F("[MQTT] up="));
+  Serial.print(upMs / 1000);
+  Serial.print(F("s ms="));
+  Serial.print(upMs);
+  Serial.print(F(" rtc="));
+  Serial.print(rtc.getHour(true));
+  Serial.print(F(":"));
+  if (rtc.getMinute() < 10)
+    Serial.print(F("0"));
+  Serial.print(rtc.getMinute());
+  Serial.print(F(":"));
+  if (rtc.getSecond() < 10)
+    Serial.print(F("0"));
+  Serial.print(rtc.getSecond());
+  Serial.print(F(" "));
+}
+
+static const char *mqttStateStr(int rc)
+{
+  switch (rc)
+  {
+  case -4:
+    return "TIMEOUT";
+  case -3:
+    return "LOST";
+  case -2:
+    return "CONNECT_FAIL";
+  case -1:
+    return "DISCONNECTED";
+  case 0:
+    return "CONNECTED";
+  default:
+    return "?";
+  }
+}
+
+static const unsigned long MQTT_LOOP_LOG_INTERVAL_MS = 30000;
+static unsigned long lastMqttLoopLogMs = 0;
+static uint32_t mqttLoopPumpTotal = 0;
+
+/** เรียกเมื่อถือ net lock อยู่แล้ว */
+static void mqttPumpLoopLocked(int rounds = 3, const char *tag = nullptr)
+{
+  if (!mqclient.connected())
+    return;
+  for (int i = 0; i < rounds; i++)
+  {
+    mqttTransportLoop();
+    mqclient.loop();
+    mqttLoopPumpTotal++;
+    vTaskDelay(1);
+  }
+  const unsigned long now = millis();
+  if (lastMqttLoopLogMs == 0 ||
+      (unsigned long)(now - lastMqttLoopLogMs) >= MQTT_LOOP_LOG_INTERVAL_MS)
+  {
+    lastMqttLoopLogMs = now;
+    mqttLogPrefix();
+    Serial.print(F("loop pump tag="));
+    Serial.print(tag ? tag : "?");
+    Serial.print(F(" rounds="));
+    Serial.print(rounds);
+    Serial.print(F(" total="));
+    Serial.println(mqttLoopPumpTotal);
+  }
+}
 
 void taskWifiMqtt(void *parameter);  // forward declaration (defined later)
 void setPriceShow();                 // forward declaration (defined later)
@@ -1040,10 +1167,32 @@ static int lastMqttFailRc = 0;
 static int lastMqttFailPort = 0;
 static int mqttConnectFailStreak = 0;
 static char configResponseTopicBuf[80];
+
+/** log ตอน MQTT หลุด — เรียกก่อน disconnect() ถ้ายัง connected */
+static void logMqttDropped(const char *reason)
+{
+  const int rc = mqclient.state();
+  mqttLogPrefix();
+  Serial.print(F("DROPPED reason="));
+  Serial.print(reason);
+  Serial.print(F(" rc="));
+  Serial.print(rc);
+  Serial.print(F("("));
+  Serial.print(mqttStateStr(rc));
+  Serial.print(F(") wifi="));
+  Serial.print(WiFi.status());
+  Serial.print(F(" rssi="));
+  Serial.print(WiFi.RSSI());
+  Serial.print(F(" failStreak="));
+  Serial.println(mqttConnectFailStreak);
+}
+
 static bool pendingPresenceAfterMqttConnect = false;
 static bool pendingPresenceHeartbeat = false;
 static bool pendingUpdateStatePublish = false;
 static char pendingUpdateStateBuf[220];
+static bool pendingUptimePublish = false;
+static char pendingUptimeBuf[120];
 static bool pendingMqttDiagAfterConnect = false;
 static int pendingMqttDiagRc = 0;
 static int pendingMqttDiagFails = 0;
@@ -1056,14 +1205,19 @@ static void teardownMqttOnWifiDown()
   pendingPresenceHeartbeat = false;
   pendingUpdateStatePublish = false;
   pendingUpdateStateBuf[0] = '\0';
+  pendingUptimePublish = false;
+  pendingUptimeBuf[0] = '\0';
   pendingMqttDiagAfterConnect = false;
   if (!netLockEnter())
     return;
   // ปิดครั้งเดียว — disconnect() มี client.stop() ในตัว; อย่า stop() ซ้ำ (lwIP pbuf assert)
   if (mqclient.connected())
+  {
+    logMqttDropped("wifi_down");
     mqclient.disconnect();
+  }
   else
-    client.stop();
+    mqttTransportStop();
   netLockLeave();
 }
 
@@ -1086,7 +1240,12 @@ static void buildPresencePayload(const char* state, bool withConnInfo = false) {
   fwStr.replace("Version ", "");
   fwStr.trim();
   doc["fw"] = fwStr;
+#if MQTT_USE_WEBSOCKET
+  doc["mv"] = MELODY_PROTOCOL_VERSION;
+  doc["transport"] = "wss";
+#else
   doc["mv"] = 3;
+#endif
   if (withConnInfo && mqtt_server != nullptr) {
     doc["broker"] = mqtt_server;
     doc["port"] = mqtt_port;
@@ -1138,9 +1297,17 @@ static void processDeferredMqttWork()
 
   if (pendingUpdateStatePublish && pendingUpdateStateBuf[0] != '\0')
   {
-    mqclient.publish("UpdateState", pendingUpdateStateBuf);
-    pendingUpdateStatePublish = false;
+    if (mqclient.publish("UpdateState", pendingUpdateStateBuf))
+      Serial.println(String("[MQTT] UpdateState -> ") + pendingUpdateStateBuf);
   }
+  pendingUpdateStatePublish = false;
+
+  if (pendingUptimePublish && pendingUptimeBuf[0] != '\0')
+  {
+    if (mqclient.publish("Uptime", pendingUptimeBuf))
+      Serial.println(String("[MQTT] Uptime -> ") + pendingUptimeBuf);
+  }
+  pendingUptimePublish = false;
 
   if (pendingPresenceAfterMqttConnect)
   {
@@ -1186,7 +1353,7 @@ static void processDeferredMqttWork()
     Serial.println(String("[MQTT] mqttDiag recovered -> ") + mqttDiagTopicBuf);
   }
 
-  mqttPumpLoopLocked(2);
+  mqttPumpLoopLocked(2, "deferred");
   netLockLeave();
 }
 
@@ -1206,10 +1373,11 @@ void publishPresenceOfflineGraceful() {
   buildPresencePayload("offline");
   mqclient.publish(presenceTopicBuf, presencePayloadBuf, true);
   for (int i = 0; i < 5; i++) {
-    mqttPumpLoopLocked(1);
+    mqttPumpLoopLocked(1, "presence_off");
     delay(20);
   }
   Serial.println(String("[MQTT] presence offline (graceful) -> ") + presenceTopicBuf);
+  logMqttDropped("graceful_offline");
   mqclient.disconnect();
   netLockLeave();
 }
@@ -1342,20 +1510,17 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void mqttreconnect() {
   static unsigned long lastReconnectAttempt = 0;
-  static unsigned long reconnectInterval = 5000;   // backoff เบา 5→15s
-  static uint8_t mqttSamePortFails = 0;            // fail ติดกันในพอร์ตเดิม — ครบ 4 ค่อยเปลี่ยนพอร์ต
+  static const unsigned long MQTT_RECONNECT_MS = 5000;   // 5-5-5-5 วินาทีคงที่ก่อนหมุนพอร์ต
+  static const uint8_t MQTT_SAME_PORT_FAIL_MAX = 4;
+  static uint8_t mqttSamePortFails = 0;
 
   // วินิจฉัยสาเหตุหลุด: log ตอน connected -> disconnected (edge)
   // rc=-3 CONNECTION_LOST (TCP ถูกตัด) / rc=-4 CONNECTION_TIMEOUT (ping ไม่ตอบ) / rc=-1 เราสั่ง disconnect
   static bool mqttWasConnected = false;
   bool mqttNowConnected = mqclient.connected();
   if (mqttWasConnected && !mqttNowConnected) {
-    Serial.print(F("[MQTT] dropped rc="));
-    Serial.print(mqclient.state());
-    Serial.print(F(" wifi="));
-    Serial.print(WiFi.status());
-    Serial.print(F(" rssi="));
-    Serial.println(WiFi.RSSI());
+    logMqttDropped("edge");
+    lastReconnectAttempt = millis() - MQTT_RECONNECT_MS;  // ลอง reconnect ทันทีรอบถัดไป
   }
   mqttWasConnected = mqttNowConnected;
 
@@ -1365,7 +1530,8 @@ void mqttreconnect() {
 
   if (!mqclient.connected()) {
     unsigned long now = millis();
-    if (now - lastReconnectAttempt >= reconnectInterval) {
+    if (lastReconnectAttempt == 0 ||
+        (unsigned long)(now - lastReconnectAttempt) >= MQTT_RECONNECT_MS) {
       lastReconnectAttempt = now;
       if (!netLockEnter())
         return;
@@ -1375,10 +1541,14 @@ void mqttreconnect() {
       if (mqclient.connected())
         mqclient.disconnect();
       else
-        client.stop();
+        mqttTransportStop();
       vTaskDelay(pdMS_TO_TICKS(50));
       yield();
 
+#if MQTT_USE_WEBSOCKET
+      mqtt_server = mqtt_ws_host;
+      mqtt_port = mqtt_ws_port;
+#else
       // สลับ server และ port ตาม mqttStatus
       if (mqttStatus == 1) {
         mqtt_server = mqtt_server1;
@@ -1387,18 +1557,35 @@ void mqttreconnect() {
         mqtt_server = "broker.mqtt.cool";
         mqtt_port = mqtt_port2;
       }
+#endif
 
       Serial.print("MQTT connecting to port: ");
       Serial.println(mqtt_port);
 
       vTaskDelay(pdMS_TO_TICKS(1));
 
+#if MQTT_USE_WEBSOCKET
+      if (!mqttWsEnsureConnected())
+      {
+        lastMqttFailRc = -2;
+        lastMqttFailPort = mqtt_port;
+        mqttConnectFailStreak++;
+        mqttSamePortFails++;
+        mqttLogPrefix();
+        Serial.println(F("[MQTT-WS] connection failed before MQTT connect"));
+        netLockLeave();
+        return;
+      }
+#endif
+
       mqclient.setServer(mqtt_server, mqtt_port);
       mqclient.setKeepAlive(60);  // ตรงกับ 3.00 — keepAlive 15 พิสูจน์แล้วว่า drop ถี่ขึ้น + churn กระตุ้น crash
       mqclient.setCallback(callback);
       mqclient.setSocketTimeout(15);  // ตรงกับ 3.00 (default 15s) — 6s ตัด socket เร็วไปตอน WiFi jitter → หลุดทั้งที่ยังต่อ
       mqclient.setBufferSize(2048);
+#if !MQTT_USE_WEBSOCKET
       client.setTimeout(15000);
+#endif
 
       topic = "V" + String(gid);
       // LWT : ถ้า ESP หลุดแบบไม่ตั้งใจ broker จะ publish presence offline ให้อัตโนมัติ
@@ -1426,27 +1613,40 @@ void mqttreconnect() {
           pendingMqttDiagRc = prevRc;
           pendingMqttDiagFails = prevFails;
         }
-        reconnectInterval = 5000;
         mqttSamePortFails = 0;
-        Serial.println("MQTT connected : " + String(mqtt_port) + " subscribed : " + topic + " , " + String(configResponseTopicBuf));
+        mqttLogPrefix();
+        Serial.print(F("CONNECTED port="));
+        Serial.print(mqtt_port);
+        Serial.print(F(" topics="));
+        Serial.print(topic);
+        Serial.print(F(","));
+        Serial.println(configResponseTopicBuf);
       } else {
         lastMqttFailRc = mqclient.state();
         lastMqttFailPort = mqtt_port;
         mqttConnectFailStreak++;
         mqttSamePortFails++;
-        // อยู่พอร์ตเดิมก่อน — fail ครบ 4 ครั้งค่อยเปลี่ยนพอร์ต; backoff เบา 5→15s; เปลี่ยนพอร์ตแล้วเริ่มใหม่ 5s
-        if (mqttStatus == 1 && mqttSamePortFails >= 4) {
+#if !MQTT_USE_WEBSOCKET
+        // 5-5-5-5 วินาทีคงที่ — fail ครบ 4 ครั้งในพอร์ตเดียวค่อยเปลี่ยนพอร์ต
+        if (mqttStatus == 1 && mqttSamePortFails >= MQTT_SAME_PORT_FAIL_MAX) {
           mqttSamePortFails = 0;
           mqtt_port1++;
           if (mqtt_port1 >= 4745)
             mqtt_port1 = 4741;
-          reconnectInterval = 5000;
-        } else {
-          reconnectInterval = min(reconnectInterval * 2, 15000UL);
+          mqttLogPrefix();
+          Serial.print(F("ROTATE port -> "));
+          Serial.println(mqtt_port1);
         }
-        Serial.print("MQTT connection failed, rc=");
-        Serial.println(lastMqttFailRc);
-        Serial.println("Will try again in " + String(reconnectInterval / 1000) + "s, port: " + String(mqtt_port1) + " (fail " + String(mqttSamePortFails) + "/4)");
+#endif
+        mqttLogPrefix();
+        Serial.print(F("CONNECT_FAIL rc="));
+        Serial.print(lastMqttFailRc);
+        Serial.print(F(" retry in 5s port="));
+        Serial.print(mqtt_port1);
+        Serial.print(F(" fail "));
+        Serial.print(mqttSamePortFails);
+        Serial.print(F("/"));
+        Serial.println(MQTT_SAME_PORT_FAIL_MAX);
       }
       vTaskDelay(pdMS_TO_TICKS(1));
       netLockLeave();
@@ -2958,7 +3158,7 @@ static void pauseMqttForOta()
     }
     else
     {
-      client.stop();  // ปิดครั้งเดียว — อย่า double-close (lwIP pbuf assert)
+      mqttTransportStop();  // ปิดครั้งเดียว — อย่า double-close (lwIP pbuf assert)
     }
     netLockLeave();
   }
@@ -3608,7 +3808,7 @@ void taskWifiMqtt(void *parameter){
 
         if (mqclient.connected() && !wifiLinkUsable()) {
           if (netLockEnter()) {
-            mqttPumpLoopLocked(1);
+            mqttPumpLoopLocked(1, "warmup");
             netLockLeave();
           }
         }
@@ -3683,6 +3883,9 @@ void taskWifiMqtt(void *parameter){
             String msg = "{\"ID\":\"" + IDserver + "\",\"Title\":\"" + Noserial + "\",\"Status\":\"" + StatusControl + "\",\"Time\":\"" + TimeSent + "\"}";
             msg.toCharArray(pendingUpdateStateBuf, sizeof(pendingUpdateStateBuf));
             pendingUpdateStatePublish = true;
+            String uptimeMsg = "{\"ID\":\"" + IDserver + "\",\"Title\":\"" + Noserial + "\",\"Time\":\"" + TimeSent + "\"}";
+            uptimeMsg.toCharArray(pendingUptimeBuf, sizeof(pendingUptimeBuf));
+            pendingUptimePublish = true;
             Serial.println("state update status and time ..!! :: " + StatusControl + " :: " + TimeSent);
           } else if (mqttDownForFallback() && !isMelodyBootSetupPhase()) {
             // MQTT ล่มจริง (fail > 20 ครั้ง) → ส่งสถานะทาง HTTP แทน เพื่อให้ Melody เห็นลูกค้าใช้เครื่อง
@@ -3759,7 +3962,7 @@ void taskWifiMqtt(void *parameter){
       } else {
         if (mqclient.connected()) {
           if (netLockEnter()) {
-            mqttPumpLoopLocked(1);
+            mqttPumpLoopLocked(1, "wifi_glitch");
             netLockLeave();
           }
         }
@@ -4918,7 +5121,7 @@ static bool ensureMqttForOtaStatus() {
     mqttreconnect();
     for (int i = 0; i < 40; i++) {
       if (netLockEnter()) {
-        mqttPumpLoopLocked(1);
+        mqttPumpLoopLocked(1, "ota");
         netLockLeave();
       }
       delay(50);
@@ -4946,7 +5149,7 @@ void sendOtaStatusMqtt(const char* phase, int percent, const char* message) {
     mqclient.publish("OtaStatus", out.c_str());
     Serial.println("[MQTT] OtaStatus " + String(phase) + " " + String(percent) + "%");
     for (int i = 0; i < 15; i++) {
-      mqttPumpLoopLocked(1);
+      mqttPumpLoopLocked(1, "ota_status");
       delay(50);
     }
     netLockLeave();
@@ -4993,12 +5196,12 @@ void GetData()
     if (!netLockEnter())
       return;
     mqclient.publish("configRequest", reqPayload.c_str());
-    mqttPumpLoopLocked(2);
+    mqttPumpLoopLocked(2, "getdata");
     Serial.println(F("       (รอ configResponse จากระบบ สูงสุด 8 วินาที)"));
     const unsigned long waitMs = 8000;
     const unsigned long start = millis();
     while (millis() - start < waitMs) {
-      mqttPumpLoopLocked(1);
+      mqttPumpLoopLocked(1, "getdata_wait");
       netLockLeave();
       vTaskDelay(pdMS_TO_TICKS(50));
       if (!netLockEnter())
@@ -5171,7 +5374,7 @@ void PublishConfigViaMqtt() {
   if (!netLockEnter())
     return;
   bool ok = mqclient.publish("getdataResponse", output.c_str());
-  mqttPumpLoopLocked(3);
+  mqttPumpLoopLocked(3, "getdata_resp");
   netLockLeave();
   if (ok) {
     Serial.println("MQTT getdataResponse published OK");

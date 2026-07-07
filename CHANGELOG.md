@@ -5,6 +5,65 @@
 
 ---
 
+## Version 3.91 (2026-07-07) — Melody protocol v4 (mv:4 + WSS)
+
+### Melody v4 — MQTT over WebSocket (sync กับ TM)
+
+- `MELODY_PROTOCOL_VERSION 4` + presence `mv:4`, `transport:wss` เมื่อ `MQTT_USE_WEBSOCKET`
+- `MqttWsWifiClient` adapter + `links2004/WebSockets` — pump `_ws.loop()` ใน read/available
+- `varable.h` จัด DEPLOY CONFIG ด้านบน; `userID = ai_touch` (OTA S3)
+- ไฟล์: `src/main.cpp`, `src/varable.h`, `src/mqtt_ws_client.h`, `platformio.ini`
+
+### Rollback
+
+- ตั้ง `MQTT_USE_WEBSOCKET 0`, `mv:3` หรือย้อน **3.87**
+
+---
+
+## Version 3.87 (2026-07-07)
+
+### MQTT Uptime + log UpdateState (sync กับ TM)
+
+- ส่ง Uptime คู่ UpdateState + log publish สำเร็จ
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+### Rollback
+
+- ย้อนไป: **Version 3.86**
+
+---
+
+## Version 3.86 (2026-07-07)
+
+### MQTT reconnect เร็วขึ้น — 5-5-5-5 ก่อนหมุนพอร์ต (sync กับ TM)
+
+- หลุด edge → reconnect ทันที; connect fail → retry 5s คงที่ ×4 แล้วหมุนพอร์ต
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+### Rollback
+
+- ย้อนไป: **Version 3.85**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเวอร์ชันเดียวกัน
+- ไฟล์ที่ต้องคืน: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 3.85 (2026-07-07)
+
+### Serial log วินิจฉัย MQTT loop + หลุด (uptime + RTC) — sync กับ TM
+
+- **`mqttPumpLoopLocked()`** — log ทุก 30s: `tag`, `rounds`, `total` + uptime + RTC
+- **`logMqttDropped(reason)`** — log ตอนหลุดพร้อม `rc`, WiFi, RSSI, `failStreak`
+- ไฟล์: `src/main.cpp`, `src/varable.h`
+
+### Rollback
+
+- ย้อนไป: **Version 3.84**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเวอร์ชันเดียวกัน
+- ไฟล์ที่ต้องคืน: `src/main.cpp`, `src/varable.h`
+
+---
+
 ## Version 3.84 (2026-07-07)
 
 ### กลับไปโมเดลเน็ต v3.78 (ตอบสนองดี) + เก็บเฉพาะ HTTP revenue (sync กับ TM)
