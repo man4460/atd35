@@ -3,6 +3,9 @@
 
 // ESP32-S3 touch — OTA ai_touch (TCP) / wss_touch (Melody v4 WSS)
 #define OldBoard 0
+// --- MQTT — v4 WSS หรือ TCP เก่า ---
+#define MELODY_PROTOCOL_VERSION 4
+#define MQTT_USE_WEBSOCKET 1
 
 #define WiFi_TIMEOUT_MS 20000
 
@@ -10,7 +13,7 @@
 //  DEPLOY CONFIG — แก้เฉพาะบล็อกนี้ก่อน pio run / flash
 // =============================================================================
 
-const char* fwversion[] = {"Current Firmware\r\n", "Version 3.92\r\n"};
+const char* fwversion[] = {"Current Firmware\r\n", "Version 3.97\r\n"};
 
 // --- ตัวเครื่อง / Melody ---
 int gid = 99;
@@ -28,21 +31,19 @@ String userID = "ai_touch"; // OTA → fw/ai_touch/
 String ssidStr = "melody";
 String passStr = "0815418771";
 
-// --- MQTT — v4 WSS หรือ TCP เก่า ---
-#define MELODY_PROTOCOL_VERSION 4
-#define MQTT_USE_WEBSOCKET 1
-
 #if MQTT_USE_WEBSOCKET
 #define MQTT_WS_USE_SSL 1
 const char* mqtt_ws_host = "melodymqtt.ma-well.com";
 const int mqtt_ws_port = 443;
 const char* mqtt_ws_path = "/";
 int mqtt_port1 = 443;
+const char* qr_payment_url = "http://mawell.thddns.net:4740/espqr";
 #else
 const char* mqtt_server1 = "mawell.thddns.net";
 const char* mqtt_server2 = "broker.mqtt.cool";
 int mqtt_port1 = 4741;
 int mqtt_port2 = 1883;
+const char* qr_payment_url = "";
 #endif
 
 const char* mqtt_username = "mawell";
@@ -266,5 +267,6 @@ String pendingLabel1 = "";
 String pendingLabel2 = "";
 int pendingProgram = 0;
 String pendingQrPayload = "";
+bool pendingQrHttpRequest = false;
 
 #endif /* VARABLE_H_ */

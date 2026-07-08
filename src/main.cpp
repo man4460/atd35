@@ -183,22 +183,22 @@ static const char *mqttStateStr(int rc)
   }
 }
 
-static const unsigned long MQTT_LOOP_LOG_INTERVAL_MS = 30000;
-static unsigned long lastMqttLoopLogMs = 0;
-static uint32_t mqttLoopPumpTotal = 0;
-
-/** เรียกเมื่อถือ net lock อยู่แล้ว */
 static void mqttPumpLoopLocked(int rounds = 3, const char *tag = nullptr)
 {
   if (!mqclient.connected())
     return;
+  (void)tag;
   for (int i = 0; i < rounds; i++)
   {
     mqttTransportLoop();
     mqclient.loop();
-    mqttLoopPumpTotal++;
     vTaskDelay(1);
   }
+#if 0  // debug: ปิด — spam serial ทุก 30s ตอน deferred pump
+  static const unsigned long MQTT_LOOP_LOG_INTERVAL_MS = 30000;
+  static unsigned long lastMqttLoopLogMs = 0;
+  static uint32_t mqttLoopPumpTotal = 0;
+  mqttLoopPumpTotal++;
   const unsigned long now = millis();
   if (lastMqttLoopLogMs == 0 ||
       (unsigned long)(now - lastMqttLoopLogMs) >= MQTT_LOOP_LOG_INTERVAL_MS)
@@ -212,6 +212,7 @@ static void mqttPumpLoopLocked(int rounds = 3, const char *tag = nullptr)
     Serial.print(F(" total="));
     Serial.println(mqttLoopPumpTotal);
   }
+#endif
 }
 
 void taskWifiMqtt(void *parameter);  // forward declaration (defined later)
@@ -251,7 +252,8 @@ enum HttpJobType {
   HTTP_JOB_GETSETUP,
   HTTP_JOB_BALANCE,
   HTTP_JOB_SENT_ADMIN,
-  HTTP_JOB_CHECK
+  HTTP_JOB_CHECK,
+  HTTP_JOB_ESPQR
 };
 
 enum HttpState {
@@ -279,6 +281,7 @@ struct HttpJob {
 };
 
 static HttpJob httpJob;
+static void applyMelodyProgramDurations(int d1, int d2, int d3);
 static void httpJobStart(HttpJobType type, const String &url, const String &body, const String &contentType);
 static void httpJobStep();
 
@@ -317,8 +320,12 @@ static void httpJobStart(HttpJobType type, const String &url, const String &body
         CodeMachine = v["CodeMachine"].as<int>();
         price[0] = v["Price1"].as<int>(); price[1] = v["Price2"].as<int>(); price[2] = v["Price3"].as<int>();
         pricePro[0] = v["PricePro1"].as<int>(); pricePro[1] = v["PricePro2"].as<int>(); pricePro[2] = v["PricePro3"].as<int>();
-        timerDry[0] = v["timedry1"].as<int>(); timerDry[1] = v["timedry2"].as<int>(); timerDry[2] = v["timedry3"].as<int>();
+        applyMelodyProgramDurations(
+          v["timedry1"].as<int>(),
+          v["timedry2"].as<int>(),
+          v["timedry3"].as<int>());
         setRelayType();
+        applyMelodyProgramDurations(timerDry[0], timerDry[1], timerDry[2]);
         writePreferences();
       } else if (error) {
         Serial.print(F("deserializeJson() failed: "));
@@ -518,8 +525,8 @@ void setProgram(){
     for(int i = 0; i < program2[1]; i++){ //select temp
       Temp();
     }
-    hrs = TimeCountdown1[0];
-    minn = TimeCountdown1[1];
+    hrs = TimeCountdown2[0];
+    minn = TimeCountdown2[1];
     second = 0;
     state_step2 = false;
     state_step3 = false;
@@ -536,8 +543,8 @@ void setProgram(){
     for(int i = 0; i < program3[1]; i++){ //select temp
       Temp();
     }
-    hrs = TimeCountdown1[0];
-    minn = TimeCountdown1[1];
+    hrs = TimeCountdown3[0];
+    minn = TimeCountdown3[1];
     second = 0;
     state_step2 = false;
     state_step3 = false;
@@ -640,7 +647,7 @@ void setStartMachine(int dryFirstPaymentBaht = 0){
     Serial.println("Dry is runing..");
     lv_obj_add_flag(ui_lb_state_th,LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ui_lb_state_en,LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(ui_lb_timer_machine, "00:00:00");
+    lv_label_set_text(ui_lb_timer_machine, "00 : 00");
     lv_obj_clear_flag(ui_lb_timer_machine,LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_bg_img_src(ui_btn_img_temp, &ui_img_asset_96_png, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_flag(ui_con_icon_step,LV_OBJ_FLAG_HIDDEN);
@@ -677,8 +684,12 @@ void setStartMachine(int dryFirstPaymentBaht = 0){
     Serial.println("set start machine Wash is runing..");
     // ตั้งเวลารวมตามโปรแกรมล่วงหน้า เพื่อให้ ack แรกแสดงเวลาพร้อม status (ตรงกับ setProgram)
     // นับถอยหลังจริงเริ่มเมื่อ status_machine_run = true เท่านั้น (machineRuning) จึงไม่ลดระหว่างเตรียม
-    if(program == 1 || program == 2 || program == 3){
+    if(program == 1){
       hrs = TimeCountdown1[0]; minn = TimeCountdown1[1]; second = 0;
+    }else if(program == 2){
+      hrs = TimeCountdown2[0]; minn = TimeCountdown2[1]; second = 0;
+    }else if(program == 3){
+      hrs = TimeCountdown3[0]; minn = TimeCountdown3[1]; second = 0;
     }else if(program == 4){
       hrs = TimeCountdowndrum[0]; minn = TimeCountdowndrum[1]; second = 0;
     }else if(program == 5){
@@ -907,6 +918,66 @@ void checkQrpaymentGen(){
     }
   }
 }
+
+static bool requestQrPaymentHttp() {
+  if (!wifiLinkUsable()) {
+    Serial.println(F("[QR] postpone espqr request until WiFi is stable"));
+    return false;
+  }
+
+  setMc_no();
+  mch_order_no = Noserial + mch_order_no_set;
+
+  StaticJsonDocument<256> jsonDoc;
+  jsonDoc["mch_order_no"] = mch_order_no;
+  jsonDoc["device_id"] = Noserial;
+  jsonDoc["total_fee"] = String(item_price * 100);
+  jsonDoc["attach"] = String(gid);
+  jsonDoc["product"] = String(program);
+  String requestBody;
+  serializeJson(jsonDoc, requestBody);
+
+  if (!netLockEnter()) return false;
+  HTTPClient http;
+  http.begin(qr_payment_url);
+  http.addHeader("Content-Type", "application/json");
+  const int code = http.POST(requestBody);
+  Serial.print(F("[QR] espqr code: "));
+  Serial.println(code);
+
+  if (code != 200) {
+    String payload = http.getString();
+    if (payload.length() > 0)
+      Serial.println("[QR] espqr error body: " + payload);
+    http.end();
+    netLockLeave();
+    return true;
+  }
+
+  String payload = http.getString();
+  http.end();
+  netLockLeave();
+
+  DynamicJsonDocument doc(768);
+  DeserializationError error = deserializeJson(doc, payload);
+  if (error) {
+    Serial.print(F("[QR] espqr parse failed: "));
+    Serial.println(error.f_str());
+    return true;
+  }
+
+  String result = doc["result"].as<String>();
+  String codeUrl = doc["code_url"].as<String>();
+  if (result == "SUCCESS" && codeUrl.length() > 0) {
+    pendingQrPayload = codeUrl;
+    pendingUIAction = PENDING_UI_QR_GEN;
+    Serial.println(F("[QR] espqr success -> render QR"));
+  } else {
+    Serial.println(F("[QR] espqr returned no QR payload"));
+  }
+  return true;
+}
+
 void mqttreqest(){
   if(WiFi.status()== WL_CONNECTED){
       // printLocalTime();
@@ -1023,7 +1094,11 @@ void machineRuning(){
         // Serial.println("chanel => " + String(chanel) + " :: " + String(millis()) + " : " + String(timerstanby) + " step : " + String(step));
         // Serial.println("state => " + StatusControl + " :: " + String(hrs) + " : " + String(minn) + " : " + String(second));
       }
-      lv_label_set_text_fmt(ui_lb_timer_machine, "%02d:%02d:%02d", hrs, minn, second);
+      lv_label_set_text_fmt(
+          ui_lb_timer_machine,
+          "%02d : %02d",
+          hrs,
+          minn);
       Display.loop();
       
       if(Mode != 2){
@@ -1191,8 +1266,6 @@ static bool pendingPresenceAfterMqttConnect = false;
 static bool pendingPresenceHeartbeat = false;
 static bool pendingUpdateStatePublish = false;
 static char pendingUpdateStateBuf[220];
-static bool pendingUptimePublish = false;
-static char pendingUptimeBuf[120];
 static bool pendingMqttDiagAfterConnect = false;
 static int pendingMqttDiagRc = 0;
 static int pendingMqttDiagFails = 0;
@@ -1205,8 +1278,6 @@ static void teardownMqttOnWifiDown()
   pendingPresenceHeartbeat = false;
   pendingUpdateStatePublish = false;
   pendingUpdateStateBuf[0] = '\0';
-  pendingUptimePublish = false;
-  pendingUptimeBuf[0] = '\0';
   pendingMqttDiagAfterConnect = false;
   if (!netLockEnter())
     return;
@@ -1302,13 +1373,6 @@ static void processDeferredMqttWork()
   }
   pendingUpdateStatePublish = false;
 
-  if (pendingUptimePublish && pendingUptimeBuf[0] != '\0')
-  {
-    if (mqclient.publish("Uptime", pendingUptimeBuf))
-      Serial.println(String("[MQTT] Uptime -> ") + pendingUptimeBuf);
-  }
-  pendingUptimePublish = false;
-
   if (pendingPresenceAfterMqttConnect)
   {
     pendingPresenceAfterMqttConnect = false;
@@ -1394,15 +1458,72 @@ static bool isMelodyBootSetupPhase() {
   return (unsigned long)(millis() - melodyBootMs) < MELODY_BOOT_SETUP_GRACE_MS;
 }
 
-// กัน config ซ้ำตอน boot — รอ debounce แล้วใช้ชุดสุดท้ายจาก Melody
+// กัน config/promo ซ้ำตอน boot — รอ debounce แล้วใช้ชุดสุดท้ายจาก Melody
 static unsigned long bootMelodySyncLastMs = 0;
 static bool bootMelodyConfigPending = false;
+static bool bootMelodyPromoPending = false;
+static String bootMelodyPromoPayload;
 static int bootMelodyConfigCount = 0;
 static const unsigned long BOOT_MELODY_SYNC_DEBOUNCE_MS = 2500UL;
+static bool g_melodyDeferPrefsSave = false;
 
 static bool bootMelodySyncQuietReady() {
   return bootMelodySyncLastMs > 0 &&
          (unsigned long)(millis() - bootMelodySyncLastMs) >= BOOT_MELODY_SYNC_DEBOUNCE_MS;
+}
+
+static void applyPromoSlotsPayload(const String &payloadJson);
+void GetSetupData();
+
+static void commitMelodyPreferencesToNvs()
+{
+  setRelayType();
+  // setRelayType ตั้งโครงสร้างปุ่ม/ดรัม — อย่าให้ทับเวลา P1–P3 จาก Melody (timerDry)
+  applyMelodyProgramDurations(timerDry[0], timerDry[1], timerDry[2]);
+  vTaskDelay(pdMS_TO_TICKS(20));
+  writePreferencesfirst();
+  vTaskDelay(pdMS_TO_TICKS(20));
+  writePreferences();
+  vTaskDelay(pdMS_TO_TICKS(20));
+  setPriceShow();
+}
+
+static bool melodyBootSyncDebounceActive() {
+  if (melodyBootMs == 0)
+    return true;
+  if (mqttDownForFallback())
+    return false;
+  return (unsigned long)(millis() - melodyBootMs) < MELODY_BOOT_SETUP_GRACE_MS;
+}
+
+static bool melodyInitialBootSyncActive() {
+  return bootMelodyConfigPending || bootMelodyConfigCount > 0 || firstGetdata;
+}
+
+static void flushBootMelodySyncToNvs()
+{
+  if (!bootMelodyConfigPending && !bootMelodyPromoPending)
+    return;
+
+  g_melodyDeferPrefsSave = true;
+  if (bootMelodyConfigPending) {
+    bootMelodyConfigPending = false;
+    if (mqttPayloadBuffer.length() > 0) {
+      Serial.println(F("[MQTT] ✅ ใช้ config/setup ชุดสุดท้ายจาก Melody"));
+      GetSetupData();
+    } else {
+      Serial.println(F("[MQTT] boot sync: ข้าม config — buffer ว่าง (บันทึกไปแล้ว)"));
+    }
+  }
+  if (bootMelodyPromoPending) {
+    bootMelodyPromoPending = false;
+    Serial.println(F("[MQTT] ✅ ใช้ setPromoSlots ชุดสุดท้ายจาก Melody"));
+    applyPromoSlotsPayload(bootMelodyPromoPayload);
+    bootMelodyPromoPayload = "";
+  }
+  g_melodyDeferPrefsSave = false;
+  Serial.println(F("[MQTT] บันทึก NVS รอบเดียว (config+promo)"));
+  commitMelodyPreferencesToNvs();
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -1479,9 +1600,17 @@ void callback(char* topic, byte* payload, unsigned int length) {
         stateSendConfigMqtt = true;  // ส่ง config กลับทาง getdataResponse (เหมือน ATD_TM_V2_New_Hier)
       }
     }else if(cm_buf == "setup"){
-      Serial.println("setup data ####### : " + cm_buf);
+      Serial.println(F("[MQTT] <<< รับ setup จาก Melody"));
       mqttPayloadBuffer = message;
-      stateSetupdata = true;
+      if (melodyBootSyncDebounceActive() && melodyInitialBootSyncActive()) {
+        bootMelodyConfigCount++;
+        bootMelodyConfigPending = true;
+        bootMelodySyncLastMs = millis();
+        Serial.println(F("       -> รอ debounce แล้วบันทึก (boot sync)"));
+      } else {
+        stateSetupdata = true;
+        Serial.println(F("       -> GetSetupData() จะบันทึกลง NVS"));
+      }
     }
     else if(cm_buf == "cmProgram" || cm_buf == "cmCommand"){
       Serial.println("commandApp ####### : " + cm_buf);
@@ -1734,8 +1863,6 @@ void checkLdr1(){
       int val = 0;
       if (ldrSampler.tick(&val)) {
         sampling = false;
-        lv_label_set_text_fmt(ui_Label1, "ระบบกำลังอ่าน Ldr1 : %d", val);
-        lv_label_set_text(ui_Label2, "Read Ldr1 Sensor");
         printLdrSummary("checkLdr1", LDR1_PIN, val);
         timerCheckLDR = millis();
       }
@@ -1760,8 +1887,6 @@ void checkLdr2(){
       int val = 0;
       if (ldrSampler.tick(&val)) {
         sampling = false;
-        lv_label_set_text_fmt(ui_Label1, "ระบบกำลังอ่าน Ldr2 : %d", val);
-        lv_label_set_text(ui_Label2, "Read Ldr2 Sensor");
         printLdrSummary("checkLdr2", LDR2_PIN, val);
         timerCheckLDR = millis();
       }
@@ -2928,7 +3053,11 @@ void setup() {
     lv_label_set_text_fmt(ui_lb_price_qr, "%d.-", item_price);
     lv_label_set_text_fmt(ui_lb_clock_qr, "%02d:%02d", minn_countdown_wait, second_countdown_wait);
     // lv_obj_del(qrcode);
+#if MQTT_USE_WEBSOCKET
+    pendingQrHttpRequest = true;
+#else
     mqttreqest(); //sent requese mqtt qr code
+#endif
     // String url = "value_str2";
     // qrcode = lv_qrcode_create(ui_qr_frame, 160, lv_color_hex(0x000000), lv_color_hex(0xFFFFFF));
     // lv_qrcode_update(qrcode, value_str2.c_str(), value_str2.length());
@@ -3847,6 +3976,32 @@ void taskWifiMqtt(void *parameter){
           Serial.println(F("[Melody] boot/setup complete — sync UpdateState"));
         }
 
+        if (firstGetdata &&
+            melodyBootMs > 0 &&
+            (unsigned long)(millis() - melodyBootMs) >= MELODY_BOOT_SETUP_GRACE_MS) {
+          firstGetdata = false;
+          Serial.println(F("[MQTT] boot grace ended — stop waiting for initial configRequest"));
+        }
+
+        if (mqclient.connected() && statewifi) {
+          static unsigned long lastPresenceHeartbeatMs = 0;
+          if (lastPresenceHeartbeatMs == 0)
+            lastPresenceHeartbeatMs = millis();
+          if ((unsigned long)(millis() - lastPresenceHeartbeatMs) >= 5UL * 60 * 1000) {
+            pendingPresenceHeartbeat = true;
+            lastPresenceHeartbeatMs = millis();
+          }
+          processDeferredMqttWork();
+        }
+
+#if MQTT_USE_WEBSOCKET
+        if (pendingQrHttpRequest && httpJob.state == HTTP_IDLE) {
+          if (requestQrPaymentHttp()) {
+            pendingQrHttpRequest = false;
+          }
+        }
+#endif
+
         // ส่ง configRequest เฉพาะเมื่อ MQTT เชื่อมต่อแล้ว และเป็นครั้งแรกหรือมีการขอ GetData
         if(stateGetdata || firstGetdata){
           if (mqclient.connected()) {
@@ -3857,13 +4012,8 @@ void taskWifiMqtt(void *parameter){
           // ถ้า MQTT ยังไม่ต่อ ยังไม่ล้าง firstGetdata จะรอรอบถัดไปจนกว่า MQTT จะเชื่อมต่อ
         }
 
-        if (isMelodyBootSetupPhase() && bootMelodySyncQuietReady()) {
-          if (bootMelodyConfigPending) {
-            bootMelodyConfigPending = false;
-            Serial.println(F("[MQTT] ✅ ใช้ configResponse ชุดสุดท้ายจาก Melody -> GetSetupData()"));
-            GetSetupData();
-          }
-        }
+        if (isMelodyBootSetupPhase() && bootMelodySyncQuietReady())
+          flushBootMelodySyncToNvs();
 
         if(stateSetupdata){
           stateSetupdata = false;
@@ -3883,9 +4033,6 @@ void taskWifiMqtt(void *parameter){
             String msg = "{\"ID\":\"" + IDserver + "\",\"Title\":\"" + Noserial + "\",\"Status\":\"" + StatusControl + "\",\"Time\":\"" + TimeSent + "\"}";
             msg.toCharArray(pendingUpdateStateBuf, sizeof(pendingUpdateStateBuf));
             pendingUpdateStatePublish = true;
-            String uptimeMsg = "{\"ID\":\"" + IDserver + "\",\"Title\":\"" + Noserial + "\",\"Time\":\"" + TimeSent + "\"}";
-            uptimeMsg.toCharArray(pendingUptimeBuf, sizeof(pendingUptimeBuf));
-            pendingUptimePublish = true;
             Serial.println("state update status and time ..!! :: " + StatusControl + " :: " + TimeSent);
           } else if (mqttDownForFallback() && !isMelodyBootSetupPhase()) {
             // MQTT ล่มจริง (fail > 20 ครั้ง) → ส่งสถานะทาง HTTP แทน เพื่อให้ Melody เห็นลูกค้าใช้เครื่อง
@@ -3941,17 +4088,6 @@ void taskWifiMqtt(void *parameter){
           setupTime();
         }else if (rtc.getHour(true) == 0 && rtc.getMinute() == 1 && midnight){
           midnight = false;
-        }
-
-        if (mqclient.connected() && statewifi) {
-          static unsigned long lastPresenceHeartbeatMs = 0;
-          if (lastPresenceHeartbeatMs == 0)
-            lastPresenceHeartbeatMs = millis();
-          if ((unsigned long)(millis() - lastPresenceHeartbeatMs) >= 5UL * 60 * 1000) {
-            pendingPresenceHeartbeat = true;
-            lastPresenceHeartbeatMs = millis();
-          }
-          processDeferredMqttWork();
         }
       } else if (espWifiDownConfirmed(wifiNow)) {
         statewifi = false;
@@ -4088,6 +4224,18 @@ void modeSetting(){
 }
 void settingMode1(){
     static bool stateMode1 = true;
+    if (stateCheckLdr1 || stateCheckLdr2) {
+      static unsigned long lastLdrUiMs = 0;
+      if (lastLdrUiMs == 0 || (unsigned long)(millis() - lastLdrUiMs) >= 1000) {
+        lastLdrUiMs = millis();
+        int ldrVal = readLDRAverage(ldrPin, LDR_AVG_SAMPLES, "settingMode1 LDR display");
+        lv_label_set_text_fmt(ui_lb_display_setting, "Program => %d : %d", ldrPin, ldrVal);
+        // lv_label_set_text_fmt(ui_lb_ldr, "ldr : %d : %d.", ldrPin, ldrVal);
+      }
+      stateMode1 = true;
+      BT = 0;
+      return;
+    }
     if(stateMode1){
       stateMode1 = false;
       if(Mode1 == 0){
@@ -5156,6 +5304,20 @@ void sendOtaStatusMqtt(const char* phase, int percent, const char* message) {
   }
 }
 
+/** Melody เวลาโปรแกรม (timedry1–3 / duration1–3) → timerDry + TimeCountdown ซัก P1–P3 */
+static void applyMelodyProgramDurations(int d1, int d2, int d3) {
+  if (d1 < 1 || d2 < 1 || d3 < 1) return;
+  timerDry[0] = d1;
+  timerDry[1] = d2;
+  timerDry[2] = d3;
+  TimeCountdown1[0] = 0;
+  TimeCountdown1[1] = d1;
+  TimeCountdown2[0] = 0;
+  TimeCountdown2[1] = d2;
+  TimeCountdown3[0] = 0;
+  TimeCountdown3[1] = d3;
+}
+
 /** ตั้งค่าตัวแปร config เป็นค่าจากโรงงาน แล้วบันทึก — ใช้เมื่อขอ config ทาง MQTT แล้วไม่มีข้อมูล */
 void applyFactoryDefaultsConfig() {
   price[0] = 30; price[1] = 40; price[2] = 50;
@@ -5170,15 +5332,14 @@ void applyFactoryDefaultsConfig() {
   drum[0] = 6; drum[1] = 0; drum[2] = 0;
   check_runing_time[0] = 19; check_runing_time[1] = 13; check_runing_time[2] = 5;
   TimeCountdowndrum[0] = 1; TimeCountdowndrum[1] = 30;
-  TimeCountdown1[0] = 0; TimeCountdown1[1] = 30;
-  TimeCountdown2[0] = 0; TimeCountdown2[1] = 30;
-  TimeCountdown3[0] = 0; TimeCountdown3[1] = 30;
+  applyMelodyProgramDurations(timerDry[0], timerDry[1], timerDry[2]);
   promoSlotCount = 0;
   coinValue = 10;
   mqttStatus = 1;
   Mode = 2;
   CodeMachine = 0;
   setRelayType();
+  applyMelodyProgramDurations(timerDry[0], timerDry[1], timerDry[2]);
   writePreferences();
   setPriceShow();
   Serial.println("✅ ใช้ค่าจากโรงงาน (ไม่มี config จากระบบ)");
@@ -5235,10 +5396,24 @@ void GetSetupData() {
     DynamicJsonDocument doc(2048);
     DeserializationError error = deserializeJson(doc, mqttPayloadBuffer);
     mqttPayloadBuffer = "";
+    if (error) {
+      Serial.print(F("[MQTT] GetSetupData JSON error: "));
+      Serial.println(error.f_str());
+    } else if (doc["id"].as<String>() != Noserial) {
+      Serial.print(F("[MQTT] GetSetupData id mismatch: got "));
+      Serial.print(doc["id"].as<String>());
+      Serial.print(F(" expected "));
+      Serial.println(Noserial);
+    } else if (doc["cm"].as<String>() != "setup") {
+      Serial.print(F("[MQTT] GetSetupData cm mismatch: "));
+      Serial.println(doc["cm"].as<String>());
+    } else if (doc["value_str2"].isNull()) {
+      Serial.println(F("[MQTT] GetSetupData: value_str2 missing"));
+    }
     if (!error && doc["id"].as<String>() == Noserial && doc["cm"].as<String>() == "setup") {
       JsonObject v2 = doc["value_str2"];
       if (!v2.isNull()) {
-        if (v2.containsKey("id")) { String newId = v2["id"].as<String>(); if (Noserial != newId) { Noserial = newId; writePreferencesfirst(); } }
+        if (v2.containsKey("id")) { String newId = v2["id"].as<String>(); if (Noserial != newId) { Noserial = newId; if (!g_melodyDeferPrefsSave) writePreferencesfirst(); } }
         if (v2.containsKey("gid")) gid = v2["gid"].as<int>();
         if (v2.containsKey("ssid")) {
           String s = v2["ssid"].as<String>();
@@ -5261,7 +5436,6 @@ void GetSetupData() {
         if (v2.containsKey("Price1")) { price[0] = v2["Price1"].as<int>(); price[1] = v2["Price2"].as<int>(); price[2] = v2["Price3"].as<int>(); }
         if (v2.containsKey("PricePro1")) { pricePro[0] = v2["PricePro1"].as<int>(); pricePro[1] = v2["PricePro2"].as<int>(); pricePro[2] = v2["PricePro3"].as<int>(); }
         if (v2.containsKey("coinValue")) { int cv = v2["coinValue"].as<int>(); if (cv >= 1) coinValue = cv; }
-        if (v2.containsKey("timedry1")) { timerDry[0] = v2["timedry1"].as<int>(); timerDry[1] = v2["timedry2"].as<int>(); timerDry[2] = v2["timedry3"].as<int>(); }
         if (v2.containsKey("program1[0]")) { program1[0] = v2["program1[0]"]; program1[1] = v2["program1[1]"]; program1[2] = v2["program1[2]"]; }
         if (v2.containsKey("program2[0]")) { program2[0] = v2["program2[0]"]; program2[1] = v2["program2[1]"]; program2[2] = v2["program2[2]"]; }
         if (v2.containsKey("program3[0]")) { program3[0] = v2["program3[0]"]; program3[1] = v2["program3[1]"]; program3[2] = v2["program3[2]"]; }
@@ -5274,6 +5448,17 @@ void GetSetupData() {
         if (v2.containsKey("TimeCountdown1[0]")) { TimeCountdown1[0] = v2["TimeCountdown1[0]"]; TimeCountdown1[1] = v2["TimeCountdown1[1]"]; }
         if (v2.containsKey("TimeCountdown2[0]")) { TimeCountdown2[0] = v2["TimeCountdown2[0]"]; TimeCountdown2[1] = v2["TimeCountdown2[1]"]; }
         if (v2.containsKey("TimeCountdown3[0]")) { TimeCountdown3[0] = v2["TimeCountdown3[0]"]; TimeCountdown3[1] = v2["TimeCountdown3[1]"]; }
+        if (v2.containsKey("timedry1")) {
+          applyMelodyProgramDurations(
+            v2["timedry1"].as<int>(),
+            v2["timedry2"].as<int>(),
+            v2["timedry3"].as<int>());
+        } else if (v2.containsKey("duration1")) {
+          applyMelodyProgramDurations(
+            v2["duration1"].as<int>(),
+            v2["duration2"].as<int>(),
+            v2["duration3"].as<int>());
+        }
         if (v2.containsKey("ldr_set")) { int v = v2["ldr_set"].as<int>(); if (v >= 0) ldr_set = v * 100; }
         if (v2.containsKey("pinSlot")) { int v = v2["pinSlot"].as<int>(); if (v == SIG_PIN || v == SIG_PIN2) pinSlot = v; }
         if (v2.containsKey("StateShutdown")) StateShutdown = v2["StateShutdown"].as<int>();
@@ -5291,21 +5476,19 @@ void GetSetupData() {
           if (p > 0 && p <= 65535) port = p;
           normalizeOtaServer();
         }
-        Serial.println("Setup from MQTT applied, writing preferences.");
-        setRelayType();
-        vTaskDelay(pdMS_TO_TICKS(20));
-        writePreferencesfirst();
-        vTaskDelay(pdMS_TO_TICKS(20));
-        writePreferences();
-        vTaskDelay(pdMS_TO_TICKS(20));
-        setPriceShow();
+        if (!g_melodyDeferPrefsSave) {
+          Serial.println("Setup from MQTT applied, writing preferences.");
+          commitMelodyPreferencesToNvs();
+        } else
+          Serial.println(F("Setup from MQTT applied (defer NVS until boot sync)."));
+      } else {
+        Serial.println(F("[MQTT] GetSetupData: value_str2 is null"));
       }
     }
     stateSetupdata = false;
     return;
   }
-  Serial.println("⚠️ ไม่มี config จาก MQTT -> ใช้ค่าจากโรงงาน");
-  applyFactoryDefaultsConfig();
+  Serial.println(F("[MQTT] GetSetupData: ไม่มี payload — ข้าม (ไม่ reset โรงงาน)"));
 }
 
 // ส่ง config ปัจจุบันไป topic getdataResponse เพื่อให้ server (MelodyWebapp) รับไปบันทึก — ใช้เมื่อแอดมินส่ง getdata (เหมือน ATD_TM_V2_New_Hier)
@@ -5501,70 +5684,76 @@ void sentVarjson(){
 
 }
 
+static void applyPromoSlotsPayload(const String &payloadJson)
+{
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, payloadJson);
+  if (err)
+  {
+    Serial.print(F("deserializeJson(setPromoSlots) failed: "));
+    Serial.println(err.f_str());
+    return;
+  }
+
+  promoSlotCount = 0;
+  JsonArray slots = doc["slots"].as<JsonArray>();
+  if (!slots.isNull())
+  {
+    for (JsonObject slot : slots)
+    {
+      if (promoSlotCount >= MAX_PROMO_SLOTS)
+        break;
+
+      PromoSlot &ps = promoSlots[promoSlotCount++];
+      ps.day = slot["day"] | 0;
+
+      String startStr = slot["start"] | "00:00";
+      String endStr = slot["end"] | "00:00";
+      ps.startHour = startStr.substring(0, 2).toInt();
+      ps.startMin = startStr.substring(3, 5).toInt();
+      ps.endHour = endStr.substring(0, 2).toInt();
+      ps.endMin = endStr.substring(3, 5).toInt();
+
+      JsonArray pricesSlot = slot["prices"].as<JsonArray>();
+      for (int i = 0; i < 3; i++)
+      {
+        if (!pricesSlot.isNull() && i < (int)pricesSlot.size())
+          ps.pricePro[i] = pricesSlot[i].as<int>();
+        else
+          ps.pricePro[i] = pricePro[i];
+      }
+    }
+  }
+
+  if (doc.containsKey("Price1Pro")) pricePro[0] = doc["Price1Pro"].as<int>();
+  if (doc.containsKey("Price2Pro")) pricePro[1] = doc["Price2Pro"].as<int>();
+  if (doc.containsKey("Price3Pro")) pricePro[2] = doc["Price3Pro"].as<int>();
+  if (doc.containsKey("Price1")) price[0] = doc["Price1"].as<int>();
+  if (doc.containsKey("Price2")) price[1] = doc["Price2"].as<int>();
+  if (doc.containsKey("Price3")) price[2] = doc["Price3"].as<int>();
+
+  if (!g_melodyDeferPrefsSave)
+  {
+    writePreferences();
+    setPriceShow();
+  }
+  Serial.println("Updated promo slots via MQTT, count: " + String(promoSlotCount));
+}
+
 void commandApp(){
   if(cm == "cmProgram"){
     // ตั้งค่าโปรโมชั่นหลายช่วงเวลา/หลายวัน ผ่าน MQTT (รูปแบบเดียวกับ ATD_TM_V2_New_Hier)
     if (value_str2 == "setPromoSlots")
     {
-      StaticJsonDocument<512> doc;
-      DeserializationError err = deserializeJson(doc, value_str1);
-      if (err)
+      if (isMelodyBootSetupPhase())
       {
-        Serial.print(F("deserializeJson(setPromoSlots) failed: "));
-        Serial.println(err.f_str());
+        bootMelodyPromoPayload = value_str1;
+        bootMelodyPromoPending = true;
+        bootMelodySyncLastMs = millis();
+        Serial.println(F("[MQTT] เก็บ setPromoSlots (รอชุดสุดท้ายจาก Melody)"));
         return;
       }
-
-      promoSlotCount = 0;
-      JsonArray slots = doc["slots"].as<JsonArray>();
-      if (!slots.isNull())
-      {
-        for (JsonObject slot : slots)
-        {
-          if (promoSlotCount >= MAX_PROMO_SLOTS)
-            break;
-
-          PromoSlot &ps = promoSlots[promoSlotCount++];
-          ps.day = slot["day"] | 0;
-
-          String startStr = slot["start"] | "00:00";
-          String endStr = slot["end"] | "00:00";
-          ps.startHour = startStr.substring(0, 2).toInt();
-          ps.startMin = startStr.substring(3, 5).toInt();
-          ps.endHour = endStr.substring(0, 2).toInt();
-          ps.endMin = endStr.substring(3, 5).toInt();
-
-          // ราคาพิเศษเฉพาะช่วงนี้ (ถ้าไม่ส่งมา จะ fallback ไปใช้ pricePro ทั่วไป)
-          JsonArray pricesSlot = slot["prices"].as<JsonArray>();
-          for (int i = 0; i < 3; i++)
-          {
-            if (!pricesSlot.isNull() && i < (int)pricesSlot.size())
-            {
-              ps.pricePro[i] = pricesSlot[i].as<int>();
-            }
-            else
-            {
-              ps.pricePro[i] = pricePro[i];
-            }
-          }
-        }
-      }
-
-      // อัปเดตราคาโปรโมชั่นพื้นฐาน (default) ถ้ามีส่งมาด้วย
-      if (doc.containsKey("Price1Pro")) pricePro[0] = doc["Price1Pro"].as<int>();
-      if (doc.containsKey("Price2Pro")) pricePro[1] = doc["Price2Pro"].as<int>();
-      if (doc.containsKey("Price3Pro")) pricePro[2] = doc["Price3Pro"].as<int>();
-
-      // อัปเดตราคาปกติถ้ามีส่งมาด้วย
-      if (doc.containsKey("Price1")) price[0] = doc["Price1"].as<int>();
-      if (doc.containsKey("Price2")) price[1] = doc["Price2"].as<int>();
-      if (doc.containsKey("Price3")) price[2] = doc["Price3"].as<int>();
-
-      // เขียนเก็บลง Preferences และอัปเดตราคาแสดงผล
-      writePreferences();
-      setPriceShow();
-
-      Serial.println("Updated promo slots via MQTT, count: " + String(promoSlotCount));
+      applyPromoSlotsPayload(value_str1);
     }
     else
     {
@@ -5670,33 +5859,27 @@ void commandApp(){
       sentVarjson();
     }else if (value_str2 == "LdrOpen" || value_str2 == "LdrOpen2")
     {
-      Serial.println("******* Ldr1 Readed *******");
-      chanelLdrCheck = chanel;
-      stepLdrCheck = step;
-      stateLdr1Screen = screenUse;
-      state_status_machine_run = status_machine_run;
-      status_machine_run = false;
-      pendingUIAction = PENDING_UI_FIRST_SCREEN;
-      step = 0;chanel = 0;
+      Serial.println("******* Ldr monitor open *******");
+      pendingUIAction = PENDING_UI_BT4_SETTING;
+      chanel = 12;
+      indexSet = 0;
+      Mode1 = 0;
       if(value_str2 == "LdrOpen"){
+        ldrPin = LDR1_PIN;
         stateCheckLdr1 = true;
       }else if(value_str2 == "LdrOpen2"){
+        ldrPin = LDR2_PIN;
         stateCheckLdr2 = true;
       }
     }else if (value_str2 == "LdrClose" || value_str2 == "LdrClose2")
     {
-      chanel = chanelLdrCheck;
-      step = stepLdrCheck;
       if(value_str2 == "LdrClose"){
         stateCheckLdr1 = false;
       }else if(value_str2 == "LdrClose2"){
         stateCheckLdr2 = false;
       }
-      if(state_status_machine_run)
-      {
-        status_machine_run = true;
-      }
-      pendingUIAction = PENDING_UI_LDR_CLOSE;
+      chanel = 0;
+      pendingUIAction = PENDING_UI_BT1_HOME;
     }else if(value_str2 == "Setup"){
         SetupData = 1;
 
