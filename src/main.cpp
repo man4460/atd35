@@ -18,6 +18,9 @@
 #include <EEPROM.h>
 #include <Update.h>
 
+// Mode 1: โปรไฟล์ LDR (คาบกระพริบ + ระดับ)
+LdrLightProfile ldrLightProfile;
+
 // ปุ่มคืนค่าโรงงานตอนเปิดเครื่อง (กดก่อนอ่าน Preferences) — ใช้ BOOT บน ESP32-S3
 #ifndef FACTORY_RESTORE_BTN_PIN
 #define FACTORY_RESTORE_BTN_PIN 0
@@ -507,8 +510,8 @@ void setProgram(){
     for(int i = 0; i < program1[1]; i++){ //select temp
       Temp();
     }
-    hrs = TimeCountdown1[0];
-    minn = TimeCountdown1[1];
+    // hrs = TimeCountdown1[0];
+    // minn = TimeCountdown1[1];
     second = 0;
     state_step2 = false;
     state_step3 = false;
@@ -525,8 +528,8 @@ void setProgram(){
     for(int i = 0; i < program2[1]; i++){ //select temp
       Temp();
     }
-    hrs = TimeCountdown2[0];
-    minn = TimeCountdown2[1];
+    // hrs = TimeCountdown2[0];
+    // minn = TimeCountdown2[1];
     second = 0;
     state_step2 = false;
     state_step3 = false;
@@ -543,8 +546,8 @@ void setProgram(){
     for(int i = 0; i < program3[1]; i++){ //select temp
       Temp();
     }
-    hrs = TimeCountdown3[0];
-    minn = TimeCountdown3[1];
+    // hrs = TimeCountdown3[0];
+    // minn = TimeCountdown3[1];
     second = 0;
     state_step2 = false;
     state_step3 = false;
@@ -556,8 +559,8 @@ void setProgram(){
     }
     state_step2 = true;
     state_step3 = true;
-    hrs = TimeCountdowndrum[0];
-    minn = TimeCountdowndrum[1];
+    // hrs = TimeCountdowndrum[0];
+    // minn = TimeCountdowndrum[1];
     second = 0;
 
   }else if(program == 5){ // rin command
@@ -685,11 +688,11 @@ void setStartMachine(int dryFirstPaymentBaht = 0){
     // ตั้งเวลารวมตามโปรแกรมล่วงหน้า เพื่อให้ ack แรกแสดงเวลาพร้อม status (ตรงกับ setProgram)
     // นับถอยหลังจริงเริ่มเมื่อ status_machine_run = true เท่านั้น (machineRuning) จึงไม่ลดระหว่างเตรียม
     if(program == 1){
-      hrs = TimeCountdown1[0]; minn = TimeCountdown1[1]; second = 0;
+      hrs = TimeCountdown1[0]; minn = TimeCountdown1[1]+1; second = 0;
     }else if(program == 2){
-      hrs = TimeCountdown2[0]; minn = TimeCountdown2[1]; second = 0;
+      hrs = TimeCountdown2[0]; minn = TimeCountdown2[1]+1; second = 0;
     }else if(program == 3){
-      hrs = TimeCountdown3[0]; minn = TimeCountdown3[1]; second = 0;
+      hrs = TimeCountdown3[0]; minn = TimeCountdown3[1]+1; second = 0;
     }else if(program == 4){
       hrs = TimeCountdowndrum[0]; minn = TimeCountdowndrum[1]; second = 0;
     }else if(program == 5){
@@ -707,7 +710,7 @@ void setStartMachine(int dryFirstPaymentBaht = 0){
     lv_label_set_text(ui_lb_state_en, "Machine is runing");
 
     lv_obj_clear_flag(ui_img_wash,LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(ui_img_rin,LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(ui_img_rin,LV_OBJ_FLAG_HIDDEN); 
     lv_obj_clear_flag(ui_img_spin,LV_OBJ_FLAG_HIDDEN);
     if(program == 1){
       lv_obj_set_style_bg_img_src(ui_btn_img_temp, &ui_img_asset_87_png, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1043,24 +1046,7 @@ void machineRuning(){
           if(minn <= 1 && hrs == 0){
             minn = 1;
             count_minn_pass++;
-            //new action
-            if(count_minn_pass == 5){
-              if(CodeMachine == 4 || CodeMachine == 3){
-                Start();
-                vTaskDelay(1500 / portTICK_PERIOD_MS);
-                Power();
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-                StatusControl = "off";
-                // stateUpdateState = 1;
-
-                // go to screen 1
-                // addFlagstoFirstscreen();
-                endProgram = false;
-                chanel = 10;
-              }
-            }
-            // for old machine
+            // ไม่บังคับจบที่นาที 5 — ท้ายรอบต้องพึ่ง LDR มืดจริง
             if(count_minn_pass == 15){
               lv_obj_add_flag(ui_lb_timer_machine,LV_OBJ_FLAG_HIDDEN);
               lv_obj_clear_flag(ui_lb_state_th,LV_OBJ_FLAG_HIDDEN);
@@ -1070,8 +1056,6 @@ void machineRuning(){
               lv_label_set_text(ui_lb_state_en, "The machine cannot spin at high speed.");
               reportEspFaultToMelody("01");
             }else if(count_minn_pass >= 20){
-              // go to screen 1
-              // addFlagstoFirstscreen();
               endProgram = false;
               chanel = 10;
             }
@@ -1266,6 +1250,10 @@ static bool pendingPresenceAfterMqttConnect = false;
 static bool pendingPresenceHeartbeat = false;
 static bool pendingUpdateStatePublish = false;
 static char pendingUpdateStateBuf[220];
+static bool pendingLdrSamplePublish = false;
+static char pendingLdrSampleBuf[280];
+static bool pendingCommandBackPublish = false;
+static char pendingCommandBackBuf[280];
 static bool pendingMqttDiagAfterConnect = false;
 static int pendingMqttDiagRc = 0;
 static int pendingMqttDiagFails = 0;
@@ -1278,6 +1266,10 @@ static void teardownMqttOnWifiDown()
   pendingPresenceHeartbeat = false;
   pendingUpdateStatePublish = false;
   pendingUpdateStateBuf[0] = '\0';
+  pendingLdrSamplePublish = false;
+  pendingLdrSampleBuf[0] = '\0';
+  pendingCommandBackPublish = false;
+  pendingCommandBackBuf[0] = '\0';
   pendingMqttDiagAfterConnect = false;
   if (!netLockEnter())
     return;
@@ -1372,6 +1364,20 @@ static void processDeferredMqttWork()
       Serial.println(String("[MQTT] UpdateState -> ") + pendingUpdateStateBuf);
   }
   pendingUpdateStatePublish = false;
+
+  if (pendingLdrSamplePublish && pendingLdrSampleBuf[0] != '\0')
+  {
+    mqclient.publish("commandBack", pendingLdrSampleBuf);
+    pendingLdrSamplePublish = false;
+    pendingLdrSampleBuf[0] = '\0';
+  }
+
+  if (pendingCommandBackPublish && pendingCommandBackBuf[0] != '\0')
+  {
+    mqclient.publish("commandBack", pendingCommandBackBuf);
+    pendingCommandBackPublish = false;
+    pendingCommandBackBuf[0] = '\0';
+  }
 
   if (pendingPresenceAfterMqttConnect)
   {
@@ -1846,28 +1852,57 @@ void updateStepIcon(){
 }
 
 void checkLdr1(){
-  if(stateCheckLdr1){
-    static unsigned long timerCheckLDR = millis();
-    static LdrAvgSampler ldrSampler;
-    static bool sampling = false;
+  if (!stateCheckLdr1) {
+    return;
+  }
 
-    if (millis() - timerCheckLDR >= 900)
-    {
-      if (!sampling) {
-        ldrSampler.begin(LDR1_PIN);
-        sampling = true;
-      }
-    }
+  // Serial 100ms | MQTT: ทุก 1000ms ส่ง max:min ของรอบ
+  static unsigned long timerCheckLDR = 0;
+  static unsigned long timerLdrMqtt = 0;
+  static int mqttWinMin = 4095;
+  static int mqttWinMax = 0;
+  static bool mqttWinHas = false;
+  const unsigned long simpleIntervalMs = 100;
+  const unsigned long mqttIntervalMs = 1000;
+  unsigned long now = millis();
+  if (now - timerCheckLDR < simpleIntervalMs) {
+    return;
+  }
+  timerCheckLDR = now;
+  int val = analogRead(LDR1_PIN);
+  Serial.print("checkLdr1 | LDR pin=");
+  Serial.print(LDR1_PIN);
+  Serial.print(" now=");
+  Serial.println(val);
 
-    if (sampling) {
-      int val = 0;
-      if (ldrSampler.tick(&val)) {
-        sampling = false;
-        printLdrSummary("checkLdr1", LDR1_PIN, val);
-        timerCheckLDR = millis();
-      }
+  if (stateLdrOpen) {
+    if (!mqttWinHas) {
+      mqttWinMin = mqttWinMax = val;
+      mqttWinHas = true;
+    } else {
+      if (val < mqttWinMin) mqttWinMin = val;
+      if (val > mqttWinMax) mqttWinMax = val;
     }
-  }  
+    if (timerLdrMqtt == 0) {
+      timerLdrMqtt = now;
+    }
+    if ((now - timerLdrMqtt) >= mqttIntervalMs) {
+      timerLdrMqtt = now;
+      const int lo = mqttWinHas ? mqttWinMin : val;
+      const int hi = mqttWinHas ? mqttWinMax : val;
+      snprintf(pendingLdrSampleBuf, sizeof(pendingLdrSampleBuf),
+               "{\"cm\":\"ldrSample\",\"id\":\"%s\",\"value_str1\":\"%d\",\"value_str2\":\"LdrOpen\","
+               "\"ldr\":%d,\"ldrMax\":%d,\"ldrMin\":%d,\"pin\":%d}",
+               Noserial.c_str(), gid, hi, hi, lo, LDR1_PIN);
+      pendingLdrSamplePublish = true;
+      mqttWinMin = 4095;
+      mqttWinMax = 0;
+      mqttWinHas = false;
+    }
+  } else {
+    timerLdrMqtt = 0;
+    mqttWinHas = false;
+  }
 }
 void checkLdr2(){
   if(stateCheckLdr2){
@@ -1889,25 +1924,146 @@ void checkLdr2(){
         sampling = false;
         printLdrSummary("checkLdr2", LDR2_PIN, val);
         timerCheckLDR = millis();
+        if (stateLdrOpen) {
+          snprintf(pendingLdrSampleBuf, sizeof(pendingLdrSampleBuf),
+                   "{\"cm\":\"ldrSample\",\"id\":\"%s\",\"value_str1\":\"%d\",\"value_str2\":\"LdrOpen2\","
+                   "\"ldr\":%d,\"ldrMax\":%d,\"ldrMin\":%d,\"pin\":%d}",
+                   Noserial.c_str(), gid, val, val, val, LDR2_PIN);
+          pendingLdrSamplePublish = true;
+        }
       }
     }
   }  
 }
 
 int checkLightStart(int countStateLight, bool stateWhileRead) {
+  int sentReturn = 2; // 0=off, 1=blink/unstable, 2=on
+  stateWhile = stateWhileRead;
+
+  // Mode 1 + โปรไฟล์กระพริบที่เรียนรู้แล้ว
+  if (Mode == 1 && ldrLightProfile.valid && stateWhile) {
+    const int profileRes = checkLightWithProfile(&ldrLightProfile, ldrPin, OldBoard);
+    if (profileRes >= 0) {
+      sentReturn = profileRes;
+      Serial.println("Check light result (profile): " + String(sentReturn));
+      return sentReturn;
+    }
+  }
+
+  // Mode 6: แค่เปิด/ปิด — ใช้ hasOn + hasOff
+  if (Mode == 6 && ldrLightProfile.hasOn && ldrLightProfile.hasOff && stateWhile) {
+    const int onOffRes = checkLightOnOffProfile(&ldrLightProfile, ldrPin);
+    if (onOffRes >= 0) {
+      sentReturn = onOffRes;
+      Serial.println("Check light result (Mode6 on/off): " + String(sentReturn));
+      return sentReturn;
+    }
+  }
+
+  // CodeMachine 4: เช็ค 02 — อ่านทุก 500ms แยก ON/BLINK ด้วยยอด ≥1000
+  // 5 หน้าต่าง × 2 วิ (~10 วิ) — จาก log: ไฟนิ่ง max<~800, กระพริบมียอด ≥1000
+  if (CodeMachine == 4 && stateWhile) {
+    const unsigned long sampleGapMs = 500;
+    const unsigned long winMs = 2000;
+    const int glitchFloor = 35;
+    const int blinkHighTh = cm4_blink_th;
+    const int offTh = 3500;
+    const int winCount = 5;
+
+    int blinkVotes = 0;
+    int onVotes = 0;
+    int offVotes = 0;
+
+    for (int w = 0; w < winCount && stateWhile; w++) {
+      unsigned long winStart = millis();
+      int winMin = 4095;
+      int winMax = 0;
+      uint8_t winN = 0;
+      uint8_t highN = 0;
+
+      while ((millis() - winStart) < winMs) {
+        int val = analogRead(ldrPin);
+        if (val >= glitchFloor) {
+          if (winN == 0) {
+            winMin = winMax = val;
+            winN = 1;
+            highN = (val >= blinkHighTh) ? 1 : 0;
+          } else {
+            if (val < winMin) {
+              winMin = val;
+            }
+            if (val > winMax) {
+              winMax = val;
+            }
+            if (val >= blinkHighTh && highN < 255) {
+              highN++;
+            }
+            if (winN < 255) {
+              winN++;
+            }
+          }
+        }
+        vTaskDelay(pdMS_TO_TICKS(sampleGapMs));
+      }
+
+      const int span = (winN > 0) ? (winMax - winMin) : 0;
+      int cls = -1;
+      const char *clsName = "EMPTY->ON";
+      if (winN >= 3) {
+        if (winMax > offTh) {
+          cls = 0;
+          clsName = "OFF";
+        } else if (highN >= 1) {
+          cls = 1;
+          clsName = "BLINK";
+        } else {
+          cls = 2;
+          clsName = "ON";
+        }
+      } else {
+        cls = 2; // EMPTY = ค่าอ่านน้อย/ต่ำ → ถือเป็น ON
+      }
+
+      Serial.print("checkLightStart CM4 win");
+      Serial.print(w + 1);
+      Serial.print(" n=");
+      Serial.print(winN);
+      Serial.print(" min=");
+      Serial.print(winN > 0 ? winMin : -1);
+      Serial.print(" max=");
+      Serial.print(winN > 0 ? winMax : -1);
+      Serial.print(" span=");
+      Serial.print(span);
+      Serial.print(" highN=");
+      Serial.print(highN);
+      Serial.print(" -> ");
+      Serial.println(clsName);
+
+      if (cls == 1) {
+        blinkVotes++;
+      } else if (cls == 0) {
+        offVotes++;
+      } else {
+        onVotes++;
+      }
+    }
+
+    if (blinkVotes > 0) {
+      sentReturn = 1;
+    } else if (offVotes > 0 && onVotes == 0) {
+      sentReturn = 0;
+    } else if (onVotes >= winCount) {
+      sentReturn = 2;
+    } else {
+      sentReturn = 1;
+    }
+    Serial.println("Check light result: " + String(sentReturn));
+    return sentReturn;
+  }
+
   bool stateLight = false;
   unsigned long timerChecklight = millis();
-  int sentReturn = 2; // 0=off, 1=blink, 2=on
-  int ldrRead = 0;
-  stateWhile = stateWhileRead;
-  int LigthOn = 0;
-  int LigthOff = 0;
-  int ldrLigthCount = 0;
-  bool ligth = false;
-
-  // int LIGHT_OFF = 0;
-  // int LIGHT_BLINK = 1;
-  // int LIGHT_ON = 2;
+  bool sawGray = false;
 
   while (stateWhile) {
     static unsigned long lastReadTime = 0;
@@ -1926,13 +2082,24 @@ int checkLightStart(int countStateLight, bool stateWhileRead) {
       lastReadTime = now;
       printLdrSummary("checkLightStart", (uint8_t)ldrPin, ldrRead);
 
-      if (ldrRead <= ldr_set && !stateLight) {
+      const int darkMargin = ldrMinus / 2;
+      const bool bright = (ldrRead <= ldr_set);
+      const bool dark = (ldrRead > ldr_set + darkMargin);
+      const bool gray = !bright && !dark;
+
+      if (gray) {
+        sawGray = true;
+      }
+
+      if (bright && !stateLight) {
         countStateLight++;
         stateLight = true;
+        sawGray = false;
         Serial.println("Blink On : " + String(ldrRead));
         timerChecklight = millis();
-      } else if (ldrRead > ldr_set + ldrMinus && stateLight) {
+      } else if (dark && stateLight) {
         stateLight = false;
+        sawGray = false;
         Serial.println("Blink Off : " + String(ldrRead));
         timerChecklight = millis();
         if (countStateLight >= 5) {
@@ -1940,14 +2107,23 @@ int checkLightStart(int countStateLight, bool stateWhileRead) {
           Serial.println("Light Blink : " + String(ldrRead));
           stateWhile = false;
         }
-      } else if (millis() - timerChecklight >= 3000) {  
-        if (ldrRead > ldr_set + ldrMinus) {
+      } else if (millis() - timerChecklight >= 3000) {
+        if (sawGray || gray) {
+          sentReturn = 1;
+          Serial.println("Light Unstable : " + String(ldrRead));
+        } else if (countStateLight >= 2) {
+          sentReturn = 1;
+          Serial.println("Light Unstable blink : " + String(ldrRead));
+        } else if (bright) {
+          sentReturn = 2;
+          Serial.println("Light On : " + String(ldrRead));
+        } else if (dark) {
           sentReturn = 0;
           Serial.println("Light Off : " + String(ldrRead));
         } else {
-          sentReturn = 2;
-          Serial.println("Light On : " + String(ldrRead));
-        } 
+          sentReturn = 1;
+          Serial.println("Light Unstable : " + String(ldrRead));
+        }
         stateWhile = false;
       }
     }
@@ -2192,7 +2368,6 @@ void taskProgram(void *parameter){
       Dry(1);
     }
 
-    static LdrPeakWindow powerOnLdrPeak;
     static int count_check_power = 0;
     
     switch(chanel){
@@ -2264,7 +2439,22 @@ void taskProgram(void *parameter){
                         if (endReady) {
                           endReady = false;
                           printLdrSummary("check ldr end program", (uint8_t)ldrPin, ldrEnd);
-                          if(ldrEnd > ldr_set + ldrMinus){
+                          // CM4: มืดต้อง >3500 ค้าง 3 วิ | สว่าง <1500 รีเซ็ต
+                          // Mode1/6/CM3: เกณฑ์เดิม
+                          const bool useCm4EndLdr =
+                              (Mode == 1 || Mode == 6 || CodeMachine == 3);
+                          const int darkSure = (CodeMachine == 4)
+                                                   ? 3500
+                                                   : (useCm4EndLdr
+                                                          ? (ldr_set + ldrMinus / 2)
+                                                          : (ldr_set + ldrMinus));
+                          const int brightSure =
+                              (CodeMachine == 4 || useCm4EndLdr) ? 1500 : ldr_set;
+                          const bool darkOk = (CodeMachine == 4)
+                                                  ? (ldrEnd > darkSure)
+                                                  : (ldrEnd >= darkSure);
+
+                          if(darkOk){
                             if(millis() - timerEnd >= 3000){
                               minn_countdown_wait = 1;
                               second_countdown_wait = 0;
@@ -2273,8 +2463,9 @@ void taskProgram(void *parameter){
                               status_machine_prepare = false;
                               chanel = 10;
                               endProgram = true;
+                              Serial.println("LDR end program done..");
                             }
-                          }else if(ldrEnd < ldr_set){
+                          }else if(ldrEnd < brightSure){
                             timerEnd = millis();
                           }
                           timerstanby = millis();
@@ -2285,7 +2476,6 @@ void taskProgram(void *parameter){
                   break;
         case 1 :  //power
                   Serial.println("Power is on..");
-                  powerOnLdrPeak.reset();
                   Power();
                   // vTaskDelay(2500 / portTICK_PERIOD_MS);
                   chanel = 2;
@@ -2293,9 +2483,11 @@ void taskProgram(void *parameter){
                   break;
         case 2 :  //check power open?
                   if(Mode == 1){
+                    // <ldr_set ไปต่อ | >ldr_set+500 มืด→Power ซ้ำ | ครบ 5→00
                     int val = analogRead(ldrPin);
-                    powerOnLdrPeak.push(val);
-                    int peak = powerOnLdrPeak.peak();
+                    const int darkHi = ldr_set + (ldrMinus / 2); // 3500
+                    const bool bright = (val < ldr_set);
+                    const bool dark = (val > darkHi);
                     static unsigned long lastPowerLdrLogMs = 0;
                     if (lastPowerLdrLogMs == 0 ||
                         (unsigned long)(millis() - lastPowerLdrLogMs) >= 3000) {
@@ -2303,19 +2495,21 @@ void taskProgram(void *parameter){
                       Serial.print("check ldr power on | LDR pin=");
                       Serial.print(ldrPin);
                       Serial.print(" now=");
-                      Serial.print(val);
-                      Serial.print(" peak=");
-                      Serial.println(peak);
+                      Serial.println(val);
                     }
-                    if (val <= ldr_set || peak <= ldr_set) {
+                    if (bright) {
+                      Serial.print("power check PASS now=");
+                      Serial.println(val);
                       chanel = 3;
                       count_check_power = 0;
-                    } else if(millis() - timerstanby >= 5000){
+                    } else if (dark && (millis() - timerstanby >= 5000)) {
                       chanel = 1;
                       count_check_power++;
+                      Serial.print("power check DARK retry=");
+                      Serial.println(count_check_power);
                       if(count_check_power >= 5){
                         step = 0;
-                        chanel = 0; // send error power
+                        chanel = 0;
                         count_check_power = 0;
                         lv_obj_add_flag(ui_lb_timer_machine,LV_OBJ_FLAG_HIDDEN);
                         lv_obj_clear_flag(ui_lb_state_th,LV_OBJ_FLAG_HIDDEN);
@@ -2340,15 +2534,33 @@ void taskProgram(void *parameter){
         case 4 :  //start
                   Serial.println("start is runing..");
                   Start();
-                  vTaskDelay(1500 / portTICK_PERIOD_MS);
+                  if (CodeMachine == 4) {
+                    Serial.println("CM4 wait light settle after Start..");
+                    vTaskDelay(4000 / portTICK_PERIOD_MS);
+                  } else {
+                    vTaskDelay(1500 / portTICK_PERIOD_MS);
+                  }
                   chanel = 5;
                   timerstanby = millis();
                   break;
         case 5 :  //check start runing
-                  // Serial.println("check ldr start runing.. " + String(analogRead(LDR1_PIN)));
                   static int count_start = 0;
+                  static int cm4OnStreak = 0;
                   if(Mode == 1){
-                    if(checkLightStart(0, true) == 2){
+                    const int lightRes = checkLightStart(0, true);
+                    if(lightRes == 2){
+                      if (CodeMachine == 4) {
+                        cm4OnStreak++;
+                        Serial.print("CM4 confirm ON streak=");
+                        Serial.println(cm4OnStreak);
+                        if (cm4OnStreak < 2) {
+                          Serial.println("CM4 confirm wait then re-check..");
+                          vTaskDelay(3000 / portTICK_PERIOD_MS);
+                          chanel = 5;
+                          break;
+                        }
+                      }
+                      cm4OnStreak = 0;
                       chanel = 0;
                       if(program == 5){
                         step = 2;
@@ -2365,7 +2577,8 @@ void taskProgram(void *parameter){
                       lv_obj_add_flag(ui_lb_state_th,LV_OBJ_FLAG_HIDDEN);
                       lv_obj_add_flag(ui_lb_state_en,LV_OBJ_FLAG_HIDDEN);
                       lv_obj_clear_flag(ui_lb_timer_machine,LV_OBJ_FLAG_HIDDEN);
-                    }else if(checkLightStart(0, true) == 1){
+                    }else{
+                      cm4OnStreak = 0;
                       chanel = 4;
                       count_start++;
                       if(count_start >= 5){
@@ -4518,13 +4731,24 @@ void Anothersetting(){
     lv_label_set_text(ui_lb_display_setting, str.c_str());
   }else if(Mode2 == 14){
     lv_label_set_text(ui_lb_display_setting, "Mode update firmware");
+  }else if(Mode2 == 15){
+    lv_label_set_text_fmt(ui_lb_display_setting, "CM4 blink th : %d", cm4_blink_th);
+  }else if(Mode2 == 16){
+    lv_label_set_text_fmt(ui_lb_display_setting, "LP1 Blink learn (UP) p=%d",
+                          ldrLightProfile.valid ? (int)ldrLightProfile.periodMs : 0);
+  }else if(Mode2 == 17){
+    lv_label_set_text_fmt(ui_lb_display_setting, "LP2 ON learn (UP) on=%d",
+                          ldrLightProfile.hasOn ? ldrLightProfile.onLevel : -1);
+  }else if(Mode2 == 18){
+    lv_label_set_text_fmt(ui_lb_display_setting, "LP3 OFF learn (UP) off=%d",
+                          ldrLightProfile.hasOff ? ldrLightProfile.offLevel : -1);
   }
 
   //Button();
   if(BT == 4){
     BT = 0;
     Mode2++;
-    if(Mode2 >= 11){
+    if(Mode2 >= 19){
       Mode2 = 0;
     }
   }else if(BT == 3){
@@ -4576,6 +4800,27 @@ void Anothersetting(){
         UpdateFw = true;
         vTaskDelay(1000 / portTICK_PERIOD_MS);
       }
+    }else if(Mode2 == 15){
+      cm4_blink_th = cm4_blink_th + 100;
+      if (cm4_blink_th > 4000) cm4_blink_th = 4000;
+    }else if(Mode2 == 16){
+      if (learnLdrBlinkProfile(&ldrLightProfile, ldrPin, OldBoard)) {
+        lv_label_set_text(ui_lb_display_setting, "LP1 Blink OK - Save");
+      } else {
+        lv_label_set_text(ui_lb_display_setting, "LP1 Blink FAIL");
+      }
+    }else if(Mode2 == 17){
+      if (learnLdrOnProfile(&ldrLightProfile, ldrPin)) {
+        lv_label_set_text(ui_lb_display_setting, "LP2 ON OK - Save");
+      } else {
+        lv_label_set_text(ui_lb_display_setting, "LP2 ON FAIL");
+      }
+    }else if(Mode2 == 18){
+      if (learnLdrOffProfile(&ldrLightProfile, ldrPin)) {
+        lv_label_set_text(ui_lb_display_setting, "LP3 OFF OK - Save");
+      } else {
+        lv_label_set_text(ui_lb_display_setting, "LP3 OFF FAIL");
+      }
     }
   }else if(BT == 2){
     BT = 0;
@@ -4616,6 +4861,9 @@ void Anothersetting(){
       {
         pinSlot = SIG_PIN;
       }
+    }else if(Mode2 == 15){
+      cm4_blink_th = cm4_blink_th - 100;
+      if (cm4_blink_th < 100) cm4_blink_th = 100;
     }
   }else if(BT == 1){
     BT = 0;
@@ -4958,6 +5206,15 @@ void writePreferences()
   preferences.putInt("timerDry[2]", timerDry[2]);
 
   preferences.putInt("ldr_set", ldr_set / 100);
+  preferences.putInt("cm4Blink", cm4_blink_th / 100);
+  preferences.putBool("lpValid", ldrLightProfile.valid);
+  preferences.putBool("lpHasOn", ldrLightProfile.hasOn);
+  preferences.putBool("lpHasOff", ldrLightProfile.hasOff);
+  preferences.putUInt("lpPeriod", ldrLightProfile.periodMs);
+  preferences.putInt("lpBright", ldrLightProfile.brightLevel);
+  preferences.putInt("lpDark", ldrLightProfile.darkLevel);
+  preferences.putInt("lpOn", ldrLightProfile.onLevel);
+  preferences.putInt("lpOff", ldrLightProfile.offLevel);
   preferences.putInt("StateShutdown", StateShutdown);
   preferences.putInt("SetupData", SetupData);
 
@@ -5107,6 +5364,19 @@ void readPreferences()
   timerDry[1] = preferences.getInt("timerDry[1]", timerDry[1]);
   timerDry[2] = preferences.getInt("timerDry[2]", timerDry[2]);
   ldr_set = preferences.getInt("ldr_set", ldr_set) * 100; // แปลงกลับเป็นหน่วยที่ต้องการ
+  cm4_blink_th = preferences.getInt("cm4Blink", cm4_blink_th / 100) * 100;
+  if (cm4_blink_th < 100) cm4_blink_th = 100;
+  if (cm4_blink_th > 4000) cm4_blink_th = 4000;
+  ldrLightProfile.valid = preferences.getBool("lpValid", false);
+  ldrLightProfile.hasOn = preferences.getBool("lpHasOn", false);
+  ldrLightProfile.hasOff = preferences.getBool("lpHasOff", false);
+  ldrLightProfile.periodMs = (uint16_t)preferences.getUInt("lpPeriod", 500);
+  if (ldrLightProfile.periodMs < 100) ldrLightProfile.periodMs = 100;
+  if (ldrLightProfile.periodMs > 2500) ldrLightProfile.periodMs = 2500;
+  ldrLightProfile.brightLevel = preferences.getInt("lpBright", 0);
+  ldrLightProfile.darkLevel = preferences.getInt("lpDark", 0);
+  ldrLightProfile.onLevel = preferences.getInt("lpOn", 0);
+  ldrLightProfile.offLevel = preferences.getInt("lpOff", 0);
   StateShutdown = preferences.getInt("StateShutdown", StateShutdown);
   SetupData = preferences.getInt("SetupData", SetupData);
   // โปรโมชั่นหลายช่วง — โหลดจาก Preferences
@@ -5460,6 +5730,11 @@ void GetSetupData() {
             v2["duration3"].as<int>());
         }
         if (v2.containsKey("ldr_set")) { int v = v2["ldr_set"].as<int>(); if (v >= 0) ldr_set = v * 100; }
+        if (v2.containsKey("cm4_blink_th")) {
+          int v = v2["cm4_blink_th"].as<int>();
+          if (v >= 1 && v <= 40) cm4_blink_th = v * 100;
+          else if (v >= 100 && v <= 4000) cm4_blink_th = v;
+        }
         if (v2.containsKey("pinSlot")) { int v = v2["pinSlot"].as<int>(); if (v == SIG_PIN || v == SIG_PIN2) pinSlot = v; }
         if (v2.containsKey("StateShutdown")) StateShutdown = v2["StateShutdown"].as<int>();
         if (v2.containsKey("statusReportIntervalMinutes")) {
@@ -5543,6 +5818,7 @@ void PublishConfigViaMqtt() {
   v2["TimeCountdown3[0]"] = TimeCountdown3[0];
   v2["TimeCountdown3[1]"] = TimeCountdown3[1];
   v2["ldr_set"] = ldr_set / 100;
+  v2["cm4_blink_th"] = cm4_blink_th / 100;
   v2["StateShutdown"] = StateShutdown;
   v2["SetupData"] = SetupData;
   v2["pinSlot"] = pinSlot;
@@ -5649,6 +5925,7 @@ void sentVarjson(){
     }
 
     jsonDoc["ldr_set"] = ldr_set;
+    jsonDoc["cm4_blink_th"] = cm4_blink_th;
     jsonDoc["StateShutdown"] = StateShutdown;
     jsonDoc["SetupData"] = SetupData;
 
@@ -5864,6 +6141,7 @@ void commandApp(){
       chanel = 12;
       indexSet = 0;
       Mode1 = 0;
+      stateLdrOpen = true;
       if(value_str2 == "LdrOpen"){
         ldrPin = LDR1_PIN;
         stateCheckLdr1 = true;
@@ -5878,8 +6156,103 @@ void commandApp(){
       }else if(value_str2 == "LdrClose2"){
         stateCheckLdr2 = false;
       }
+      stateLdrOpen = false;
+      pendingLdrSamplePublish = false;
+      pendingLdrSampleBuf[0] = '\0';
       chanel = 0;
       pendingUIAction = PENDING_UI_BT1_HOME;
+    }else if (value_str2 == "LdrLearnBlink" || value_str2 == "LP1")
+    {
+      Serial.println("******* LdrLearnBlink (LP1) *******");
+      bool ok = learnLdrBlinkProfile(&ldrLightProfile, ldrPin, OldBoard);
+      if (ok) {
+        writePreferences();
+        pendingLabel1 = "LP1 Blink OK";
+        pendingLabel2 = "period=" + String(ldrLightProfile.periodMs);
+        pendingUIAction = PENDING_UI_LABEL_MSG;
+      } else {
+        pendingLabel1 = "LP1 Blink FAIL";
+        pendingLabel2 = "Try again while blinking";
+        pendingUIAction = PENDING_UI_LABEL_MSG;
+      }
+      snprintf(pendingCommandBackBuf, sizeof(pendingCommandBackBuf),
+               "{\"cm\":\"ldrLearnResult\",\"id\":\"%s\",\"value_str1\":\"%d\","
+               "\"value_str2\":\"LdrLearnBlink\",\"ok\":%d,\"period\":%u,"
+               "\"bright\":%d,\"dark\":%d,\"msg\":\"%s\"}",
+               Noserial.c_str(), gid, ok ? 1 : 0,
+               (unsigned)(ok ? ldrLightProfile.periodMs : 0),
+               ok ? ldrLightProfile.brightLevel : -1,
+               ok ? ldrLightProfile.darkLevel : -1,
+               ok ? "LP1 OK" : "LP1 FAIL");
+      pendingCommandBackPublish = true;
+    }else if (value_str2 == "LdrLearnOn" || value_str2 == "LP2")
+    {
+      Serial.println("******* LdrLearnOn (LP2) *******");
+      bool ok = learnLdrOnProfile(&ldrLightProfile, ldrPin);
+      if (ok) {
+        writePreferences();
+        pendingLabel1 = "LP2 ON OK";
+        pendingLabel2 = "on=" + String(ldrLightProfile.onLevel);
+        pendingUIAction = PENDING_UI_LABEL_MSG;
+      } else {
+        pendingLabel1 = "LP2 ON FAIL";
+        pendingLabel2 = "Steady light required";
+        pendingUIAction = PENDING_UI_LABEL_MSG;
+      }
+      snprintf(pendingCommandBackBuf, sizeof(pendingCommandBackBuf),
+               "{\"cm\":\"ldrLearnResult\",\"id\":\"%s\",\"value_str1\":\"%d\","
+               "\"value_str2\":\"LdrLearnOn\",\"ok\":%d,\"on\":%d,\"msg\":\"%s\"}",
+               Noserial.c_str(), gid, ok ? 1 : 0,
+               ok ? ldrLightProfile.onLevel : -1,
+               ok ? "LP2 OK" : "LP2 FAIL");
+      pendingCommandBackPublish = true;
+    }else if (value_str2 == "LdrLearnOff" || value_str2 == "LP3")
+    {
+      Serial.println("******* LdrLearnOff (LP3) *******");
+      bool ok = learnLdrOffProfile(&ldrLightProfile, ldrPin);
+      if (ok) {
+        writePreferences();
+        pendingLabel1 = "LP3 OFF OK";
+        pendingLabel2 = "off=" + String(ldrLightProfile.offLevel);
+        pendingUIAction = PENDING_UI_LABEL_MSG;
+      } else {
+        pendingLabel1 = "LP3 OFF FAIL";
+        pendingLabel2 = "Dark required";
+        pendingUIAction = PENDING_UI_LABEL_MSG;
+      }
+      snprintf(pendingCommandBackBuf, sizeof(pendingCommandBackBuf),
+               "{\"cm\":\"ldrLearnResult\",\"id\":\"%s\",\"value_str1\":\"%d\","
+               "\"value_str2\":\"LdrLearnOff\",\"ok\":%d,\"off\":%d,\"msg\":\"%s\"}",
+               Noserial.c_str(), gid, ok ? 1 : 0,
+               ok ? ldrLightProfile.offLevel : -1,
+               ok ? "LP3 OK" : "LP3 FAIL");
+      pendingCommandBackPublish = true;
+    }else if (value_str2 == "LdrLearnStatus" || value_str2 == "LPStatus")
+    {
+      pendingLabel1 = ldrLightProfile.valid
+                          ? ("LP OK p=" + String(ldrLightProfile.periodMs))
+                          : "LP not learned";
+      pendingLabel2 = "b=" + String(ldrLightProfile.brightLevel) +
+                      " d=" + String(ldrLightProfile.darkLevel);
+      pendingUIAction = PENDING_UI_LABEL_MSG;
+      Serial.print("LP status valid=");
+      Serial.print(ldrLightProfile.valid ? 1 : 0);
+      Serial.print(" period=");
+      Serial.println(ldrLightProfile.periodMs);
+      snprintf(pendingCommandBackBuf, sizeof(pendingCommandBackBuf),
+               "{\"cm\":\"ldrProfileStatus\",\"id\":\"%s\",\"value_str1\":\"%d\","
+               "\"value_str2\":\"LdrLearnStatus\",\"lpValid\":%d,\"period\":%u,"
+               "\"bright\":%d,\"dark\":%d,\"hasOn\":%d,\"on\":%d,\"hasOff\":%d,\"off\":%d}",
+               Noserial.c_str(), gid,
+               ldrLightProfile.valid ? 1 : 0,
+               (unsigned)ldrLightProfile.periodMs,
+               ldrLightProfile.brightLevel,
+               ldrLightProfile.darkLevel,
+               ldrLightProfile.hasOn ? 1 : 0,
+               ldrLightProfile.hasOn ? ldrLightProfile.onLevel : -1,
+               ldrLightProfile.hasOff ? 1 : 0,
+               ldrLightProfile.hasOff ? ldrLightProfile.offLevel : -1);
+      pendingCommandBackPublish = true;
     }else if(value_str2 == "Setup"){
         SetupData = 1;
 

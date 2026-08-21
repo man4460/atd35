@@ -68,6 +68,7 @@ extern bool status_machine_run;
 extern bool status_machine_prepare;
 extern int ldr_set;
 extern int ldrMinus;
+extern int cm4_blink_th;
 extern int ldrPin;
 
 static bool g_runRecoveryPending = false;

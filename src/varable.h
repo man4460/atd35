@@ -13,7 +13,7 @@
 //  DEPLOY CONFIG — แก้เฉพาะบล็อกนี้ก่อน pio run / flash
 // =============================================================================
 
-const char* fwversion[] = {"Current Firmware\r\n", "Version 3.97\r\n"};
+const char* fwversion[] = {"Current Firmware\r\n", "Version 4.26\r\n"};
 
 // --- ตัวเครื่อง / Melody ---
 int gid = 99;
@@ -53,6 +53,8 @@ int mqttStatus = 1;
 // --- LDR ---
 int ldr_set = 3000;
 int ldrMinus = 1000;
+// CM4 เช็ค 02: ยอด ≥ ค่านี้ = กระพริบ (แอดมินปรับได้)
+int cm4_blink_th = 1000;
 
 // =============================================================================
 //  HARDWARE — ESP32-S3 touch
@@ -232,6 +234,7 @@ bool state_wifi_on = true;
 
 bool stateCheckLdr1 = false;
 bool stateCheckLdr2 = false;
+bool stateLdrOpen = false; // MQTT remote stream ทุก 1000ms เมื่อ LdrOpen
 int chanelLdrCheck = 0;
 int stepLdrCheck = 0;
 int displaystandbyLdrCheck = 0;
