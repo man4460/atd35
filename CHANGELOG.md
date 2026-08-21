@@ -5,6 +5,65 @@
 
 ---
 
+## Version 4.30 (2026-08-21) — สลับแหล่ง LDR: โปรไฟล์ที่เรียน vs ldr_set
+
+### เลือกแหล่งตรวจไฟ
+
+- ซิงก์ ATD_TM: NVS `lpUse` + MQTT `LdrUseLearn` / `LdrUseDefault`
+- ปิดโปรไฟล์แล้วใช้ `ldr_set` ได้โดยไม่ลบค่าที่เรียน
+- `LdrLearnStatus` ส่ง `lpUse`
+
+### Rollback
+
+- ย้อนไป: **Version 4.29**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเดียวกัน
+- ไฟล์ที่ต้องคืน: `src/main.cpp`, `src/varable.h`
+
+---
+
+## Version 4.29 (2026-08-21) — Step3 จบรอบใช้โปรไฟล์ LDR ที่เรียน
+
+### Step 3
+
+- ซิงก์ ATD_TM: จบเมื่อมืดตามโปรไฟล์ค้าง ≥3 วิ; ไม่มืด = ยังทำงาน
+- fault 01 คงเดิม
+
+### Rollback
+
+- ย้อนไป: **Version 4.28**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเดียวกัน
+
+---
+
+## Version 4.28 (2026-08-21) — Power check อ่าน LDR แบบ median
+
+### Power check
+
+- ใช้ `readLDRAverage()` แทน sample เดียว — ซิงก์ ATD_TM
+- Serial: `avg=`
+
+### Rollback
+
+- ย้อนไป: **Version 4.27**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเดียวกัน
+
+---
+
+## Version 4.27 (2026-08-21) — Power check ใช้โปรไฟล์ LDR ที่เรียน
+
+### Power check (`chanel` 2)
+
+- ถ้ามีโปรไฟล์เรียนแล้ว → `classifyPowerLdrSample()` (Mode 1 และ 6)
+- ไม่มีโปรไฟล์: Mode 1 ใช้ `ldr_set`; Mode 6 ข้ามเช็ค
+- ซิงก์ logic กับ ATD_TM
+
+### Rollback
+
+- ย้อนไป: **Version 4.26**
+- โปรเจกต์คู่: ย้อน **ATD_TM** และ **ATD35** ไปเลขเดียวกัน
+
+---
+
 ## Version 4.26 (2026-08-21) — sync เวอร์ชัน (TM แก้ Ln/MQ)
 
 ### Sync

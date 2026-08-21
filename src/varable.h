@@ -13,7 +13,7 @@
 //  DEPLOY CONFIG — แก้เฉพาะบล็อกนี้ก่อน pio run / flash
 // =============================================================================
 
-const char* fwversion[] = {"Current Firmware\r\n", "Version 4.26\r\n"};
+const char* fwversion[] = {"Current Firmware\r\n", "Version 4.30\r\n"};
 
 // --- ตัวเครื่อง / Melody ---
 int gid = 99;

@@ -579,3 +579,100 @@ inline int checkLightWithProfile(const LdrLightProfile *p, int pin, int oldBoard
   }
   return 1;
 }
+
+/**
+ * จำแนก LDR จากโปรไฟล์ (Power / จบโปรแกรม step3)
+ * คืน 2=เปิด/สว่าง, 0=ปิด/มืด, 1=เทา/ไม่ชัด, -1=ไม่มีโปรไฟล์ → ใช้ ldr_set
+ */
+inline int classifyPowerLdrSample(const LdrLightProfile *p, int val, int oldBoard) {
+  if (!p) {
+    return -1;
+  }
+
+  if (p->hasOn && p->hasOff) {
+    int span = p->onLevel - p->offLevel;
+    if (span < 0) {
+      span = -span;
+    }
+    int levelTol = span / 3;
+    if (levelTol < 200) {
+      levelTol = 200;
+    }
+    if (ldrNearLevel(val, p->onLevel, levelTol)) {
+      return 2;
+    }
+    if (ldrNearLevel(val, p->offLevel, levelTol)) {
+      return 0;
+    }
+    int dOn = val - p->onLevel;
+    if (dOn < 0) {
+      dOn = -dOn;
+    }
+    int dOff = val - p->offLevel;
+    if (dOff < 0) {
+      dOff = -dOff;
+    }
+    if (dOn < dOff) {
+      return 2;
+    }
+    if (dOff < dOn) {
+      return 0;
+    }
+    return 1;
+  }
+
+  if (p->hasOn) {
+    const int tol = 400;
+    if (ldrNearLevel(val, p->onLevel, tol)) {
+      return 2;
+    }
+    if (oldBoard == 1) {
+      if (val < p->onLevel - tol) {
+        return 0;
+      }
+    } else if (val > p->onLevel + tol) {
+      return 0;
+    }
+    return 1;
+  }
+
+  if (p->valid && p->periodMs >= 50) {
+    int span = p->brightLevel - p->darkLevel;
+    if (span < 0) {
+      span = -span;
+    }
+    int levelTol = span / 3;
+    if (levelTol < 200) {
+      levelTol = 200;
+    }
+    int darkTol = span / 4;
+    if (darkTol < 150) {
+      darkTol = 150;
+    }
+    if (ldrNearLevel(val, p->darkLevel, darkTol)) {
+      return 0;
+    }
+    if (ldrNearLevel(val, p->brightLevel, levelTol)) {
+      return 2;
+    }
+    int mid = (p->brightLevel + p->darkLevel) / 2;
+    if (oldBoard == 1) {
+      if (val > mid) {
+        return 2;
+      }
+      if (val < p->darkLevel + darkTol) {
+        return 0;
+      }
+    } else {
+      if (val < mid) {
+        return 2;
+      }
+      if (val > p->darkLevel - darkTol) {
+        return 0;
+      }
+    }
+    return 1;
+  }
+
+  return -1;
+}
