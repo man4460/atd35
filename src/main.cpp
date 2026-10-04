@@ -1045,7 +1045,15 @@ void machineRuning(){
             }
           }
         }else{
-          if(minn <= 1 && hrs == 0){
+          if(minn <= 1 && hrs == 0 && program == 4){
+            // ล้างถังใช้เวลาจริงนานกว่าตัวนับ — ไม่แจ้ง 01 / ไม่รีเซ็ตตามเวลา รอ LDR มืดใน step 3
+            minn = 1;
+            if(step != 3){
+              step = 3;
+              timerstanby = millis();
+              Serial.println(F("Drum wash: wait LDR dark to end (no fault 01)"));
+            }
+          }else if(minn <= 1 && hrs == 0){
             minn = 1;
             count_minn_pass++;
             // ไม่บังคับจบที่นาที 5 — ท้ายรอบต้องพึ่ง LDR มืดจริง
@@ -2319,6 +2327,8 @@ void taskDisplay(void *parameter){
     vTaskDelay(10 / portTICK_PERIOD_MS); // Check connection every 10 seconds
   }
 }
+static uint8_t endDarkStreak = 0;
+
 void taskProgram(void *parameter){
   // Serial.println("** task **");
   // printTocore();
@@ -2422,10 +2432,9 @@ void taskProgram(void *parameter){
                     }
                   }else if(step == 3){//
                     // state_step3 = false;
-                    if(minn <= check_runing_time[2]){
-                      static unsigned long timerEnd = millis();
+                    if(minn <= check_runing_time[2] || program == 4){
                       if(millis() - timerstanby >= LDR_READ_INTERVAL_MS){
-                        static LdrAvgSampler endSampler;
+                        static LdrMeanSampler endSampler;
                         static bool endSampling = false;
                         static bool endReady = false;
                         static int ldrEnd = 0;
@@ -2441,8 +2450,7 @@ void taskProgram(void *parameter){
                         if (endReady) {
                           endReady = false;
                           printLdrSummary("check ldr end program", (uint8_t)ldrPin, ldrEnd);
-                          // มีโปรไฟล์เรียน + เลือกใช้: จบเมื่อมืด(ปิด) ค้าง ≥3 วิ | ไม่มืด = ยังทำงาน
-                          // ไม่มีโปรไฟล์ / เลือกค่าเดิม: เกณฑ์ ldr_set — fault 01 คงเดิม
+                          // ค่าเฉลี่ย 10 ครั้ง/100 ms — ต้องมืดติดกัน LDR_END_DARK_STREAK ครั้งถึงจบ
                           const int profileCls = ldrUseLearned
                               ? classifyPowerLdrSample(&ldrLightProfile, ldrEnd, OldBoard)
                               : -1;
@@ -2464,18 +2472,22 @@ void taskProgram(void *parameter){
                           }
 
                           if (darkOk) {
-                            if (millis() - timerEnd >= 3000) {
-                              minn_countdown_wait = 1;
-                              second_countdown_wait = 0;
-                              status_countdown_wait = true;
-                              status_machine_run = false;
-                              status_machine_prepare = false;
-                              chanel = 10;
-                              endProgram = true;
-                              Serial.println("LDR end program done..");
-                            }
+                            if (endDarkStreak < 255) endDarkStreak++;
                           } else {
-                            timerEnd = millis();
+                            endDarkStreak = 0;
+                          }
+                          Serial.print("end dark streak=");
+                          Serial.println(endDarkStreak);
+                          if (endDarkStreak >= LDR_END_DARK_STREAK) {
+                            endDarkStreak = 0;
+                            minn_countdown_wait = 1;
+                            second_countdown_wait = 0;
+                            status_countdown_wait = true;
+                            status_machine_run = false;
+                            status_machine_prepare = false;
+                            chanel = 10;
+                            endProgram = true;
+                            Serial.println("LDR end program done..");
                           }
                           timerstanby = millis();
                         }
@@ -2491,7 +2503,7 @@ void taskProgram(void *parameter){
                   timerstanby = millis();
                   break;
         case 2 :  //check power open?
-                  if(Mode == 1 || Mode == 6){
+                  if(Mode == 1 || Mode == 6 || Mode == 7){
                     // Power: median หลาย sample แล้วเทียบโปรไฟล์ / ldr_set
                     int val = readLDRAverage(ldrPin);
                     bool bright = false;
@@ -2504,7 +2516,7 @@ void taskProgram(void *parameter){
                       bright = (profileCls == 2);
                       dark = (profileCls == 0);
                       haveDecision = true;
-                    } else if (Mode == 1) {
+                    } else if (Mode == 1 || Mode == 7) {
                       const int darkHi = ldr_set + (ldrMinus / 2);
                       bright = (val < ldr_set);
                       dark = (val > darkHi);
@@ -2577,6 +2589,27 @@ void taskProgram(void *parameter){
         case 5 :  //check start runing
                   static int count_start = 0;
                   static int cm4OnStreak = 0;
+                  // Mode 7: Power ยังเช็ค LDR แต่หลัง Start ไม่เช็คประตู/ไฟ
+                  if (Mode == 7) {
+                    Serial.println(F("Mode7 skip start LDR check"));
+                    cm4OnStreak = 0;
+                    chanel = 0;
+                    if (program == 5) {
+                      step = 2;
+                    } else if (program == 6) {
+                      step = 3;
+                    } else {
+                      step = 1;
+                    }
+                    count_start = 0;
+                    status_machine_run = true;
+                    pause_timer = false;
+                    runSessionSavePhase(RS_WASH_RUNNING);
+                    lv_obj_add_flag(ui_lb_state_th, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_add_flag(ui_lb_state_en, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_clear_flag(ui_lb_timer_machine, LV_OBJ_FLAG_HIDDEN);
+                    break;
+                  }
                   if(Mode == 1){
                     const int lightRes = checkLightStart(0, true);
                     if(lightRes == 2){
@@ -2778,6 +2811,7 @@ void taskProgram(void *parameter){
                   program = 0;
                   item_price = 0;
                   count_minn_pass = 0;
+                  endDarkStreak = 0;
                   // priceSentVerver = 0;
                   stateReset = false;
                   status_machine_run = false;

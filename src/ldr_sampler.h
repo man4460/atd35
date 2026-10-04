@@ -17,8 +17,20 @@ static const uint8_t LDR_AVG_SAMPLES = 10;
 static const unsigned long LDR_SAMPLE_GAP_MS = 4;
 /** ช่วงขั้นต่ำระหว่างการอ่าน LDR รอบใหม่ (loop ตรวจ power/end/light) */
 static const unsigned long LDR_READ_INTERVAL_MS = 700;
-/** ค่าต่ำกว่านี้ถือว่า glitch ADC — ไม่นับใน median / peak */
+/**
+ * ค่าต่ำกว่านี้เคยตัดเป็น glitch ADC — แต่บอร์ดเก่าไฟมืดจริง = 0
+ * ใช้เฉพาะตอนเรียน ON (กัน spike 0 ดึงค่าเฉลี่ยลง) / ตรวจไฟที่ไม่ใช่มืด
+ * ตอนเรียน OFF / มืด และ runtime ที่โปรไฟล์มืด≈0 ต้องรับ 0 ได้
+ */
 static const int LDR_GLITCH_FLOOR = 35;
+
+/** floor ตรวจ runtime — ถ้าโปรไฟล์มืด/ปิดใกล้ 0 ให้รับ 0 */
+inline int ldrFloorAllowDark(int darkOrOffLevel) {
+  if (darkOrOffLevel >= 0 && darkOrOffLevel < LDR_GLITCH_FLOOR) {
+    return 0;
+  }
+  return LDR_GLITCH_FLOOR;
+}
 
 inline int ldrMedianInPlace(int *buf, uint8_t n) {
   if (n == 0) return 0;
@@ -85,7 +97,8 @@ struct LdrAvgSampler {
       return false;
     }
 
-    if (raw >= LDR_GLITCH_FLOOR) {
+    // รับ 0 ได้ (บอร์ดเก่าไฟมืด); median กรอง spike แปลกๆ
+    if (raw >= 0) {
       sampleBuf[got++] = raw;
     }
     if (got >= need) {
@@ -112,6 +125,50 @@ struct LdrAvgSampler {
   }
 };
 
+/** จบรอบ (step 3): อ่าน 10 ครั้ง ห่าง 100 ms (~1 วิ) แล้วเฉลี่ย — กลบค่าสวิงของ LDR */
+static const uint8_t LDR_END_SAMPLES = 10;
+static const unsigned long LDR_END_SAMPLE_GAP_MS = 100;
+/** ต้องได้ค่าเฉลี่ยมืดติดกันกี่ครั้งถึงจบรอบ */
+static const uint8_t LDR_END_DARK_STREAK = 3;
+
+struct LdrMeanSampler {
+  uint8_t pin = 0;
+  uint8_t got = 0;
+  long sum = 0;
+  unsigned long lastMs = 0;
+  bool active = false;
+
+  void begin(uint8_t p) {
+    pin = p;
+    got = 0;
+    sum = 0;
+    lastMs = 0;
+    active = true;
+  }
+
+  /** คืน true เมื่อครบ LDR_END_SAMPLES แล้วใส่ค่าเฉลี่ยใน out */
+  bool tick(int *out) {
+    if (!active) {
+      return false;
+    }
+    const unsigned long now = millis();
+    if (lastMs != 0 && (now - lastMs) < LDR_END_SAMPLE_GAP_MS) {
+      return false;
+    }
+    lastMs = now;
+    sum += analogRead(pin);
+    got++;
+    if (got < LDR_END_SAMPLES) {
+      return false;
+    }
+    active = false;
+    if (out) {
+      *out = (int)(sum / got);
+    }
+    return true;
+  }
+};
+
 /** หน้าต่างสั้นจับไฟกระพริบหลัง Power (Mode 1) — peak=สูงสุด, trough=ต่ำสุด */
 struct LdrPeakWindow {
   static const uint8_t CAP = 24;
@@ -124,7 +181,7 @@ struct LdrPeakWindow {
   }
 
   void push(int v) {
-    if (v < LDR_GLITCH_FLOOR) {
+    if (v < 0) {
       return;
     }
     buf[idx] = v;
@@ -184,7 +241,7 @@ inline int readLDRAverage(int pin, int samples = LDR_AVG_SAMPLES, const char *lo
   uint8_t n = 0;
   for (int i = 0; i < samples; i++) {
     int raw = analogRead(pin);
-    if (raw >= LDR_GLITCH_FLOOR) {
+    if (raw >= 0) {
       buf[n++] = raw;
     }
     if (i + 1 < samples) {
@@ -243,7 +300,6 @@ inline bool learnLdrBlinkProfile(LdrLightProfile *p, int pin, int oldBoard) {
   }
   const unsigned long sampleGapMs = 80;
   const unsigned long captureMs = 4000;
-  const int glitchFloor = LDR_GLITCH_FLOOR;
 
   int periods[16];
   uint8_t periodN = 0;
@@ -262,7 +318,8 @@ inline bool learnLdrBlinkProfile(LdrLightProfile *p, int pin, int oldBoard) {
   unsigned long start = millis();
   while ((millis() - start) < captureMs) {
     int raw = analogRead(pin);
-    if (raw < glitchFloor) {
+    // รับ raw=0 ได้ — บอร์ดเก่าไฟมืดจริง = 0
+    if (raw < 0) {
       delay(sampleGapMs);
       continue;
     }
@@ -377,7 +434,8 @@ inline bool learnLdrOffProfile(LdrLightProfile *p, int pin) {
   int n = 0;
   for (int i = 0; i < 20; i++) {
     int raw = analogRead(pin);
-    if (raw >= LDR_GLITCH_FLOOR) {
+    // รับ 0 ได้ — บอร์ดเก่าเครื่องปิดไฟมืด = 0 (ห้ามตัดด้วย LDR_GLITCH_FLOOR)
+    if (raw >= 0) {
       sum += raw;
       n++;
     }
@@ -413,12 +471,13 @@ inline int checkLightOnOffProfile(const LdrLightProfile *p, int pin) {
     levelTol = 200;
   }
 
+  const int sampleFloor = ldrFloorAllowDark(p->offLevel);
   uint8_t n = 0;
   long sum = 0;
   unsigned long start = millis();
   while ((millis() - start) < winMs) {
     int raw = analogRead(pin);
-    if (raw >= LDR_GLITCH_FLOOR) {
+    if (raw >= sampleFloor) {
       sum += raw;
       n++;
     }
@@ -445,6 +504,7 @@ inline int checkLightOnOffProfile(const LdrLightProfile *p, int pin) {
     return 0;
   }
 
+  // ใกล้ฝั่งไหนมากกว่า
   int dOn = avg - p->onLevel;
   if (dOn < 0) dOn = -dOn;
   int dOff = avg - p->offLevel;
@@ -500,11 +560,13 @@ inline int checkLightWithProfile(const LdrLightProfile *p, int pin, int oldBoard
   long sum = 0;
   int winMin = 4095;
   int winMax = 0;
+  const int sampleFloor = ldrFloorAllowDark(
+      (p->darkLevel < p->offLevel || !p->hasOff) ? p->darkLevel : p->offLevel);
 
   unsigned long start = millis();
   while ((millis() - start) < winMs) {
     int raw = analogRead(pin);
-    if (raw >= LDR_GLITCH_FLOOR) {
+    if (raw >= sampleFloor) {
       if (n == 0) {
         winMin = winMax = raw;
       } else {
